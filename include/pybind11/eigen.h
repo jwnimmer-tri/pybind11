@@ -83,18 +83,20 @@ struct type_caster<Type, enable_if_t<is_eigen_dense<Type>::value && !is_eigen_re
 
         if (npy_format_descriptor<Scalar>::value == npy_api::NPY_OBJECT_) {
             value_conv conv;
-
-            if (Type::RowsAtCompileTime == Eigen::Dynamic || Type::ColsAtCompileTime == Eigen::Dynamic)
-                value.resize(buf.shape(0), buf.shape(1));
-
             if (buf.ndim() == 1) {
+                if (Type::RowsAtCompileTime == Eigen::Dynamic || Type::ColsAtCompileTime == Eigen::Dynamic) {
+                    value.resize(buf.shape(0), 1);
+                }
                 for (size_t i = 0; i < buf.shape(0); ++i) {
                     auto p = buf.mutable_data(i);
                     if (!conv.load(PyArray_GETITEM(buf.ptr(), p), convert))
                         return false;
                     value(i) = cast_op<Scalar>(conv);
                 }
-            } else {
+            } else if (buf.ndim() == 2) {
+                if (Type::RowsAtCompileTime == Eigen::Dynamic || Type::ColsAtCompileTime == Eigen::Dynamic) {
+                    value.resize(buf.shape(0), buf.shape(1));
+                }
                 for (size_t i = 0; i < buf.shape(0); ++i) {
                     for (size_t j = 0; j < buf.shape(1); ++j) {
                         auto p = buf.mutable_data(i, j);
@@ -103,6 +105,8 @@ struct type_caster<Type, enable_if_t<is_eigen_dense<Type>::value && !is_eigen_re
                         value(i, j) = cast_op<Scalar>(conv);
                     }
                 }
+            } else {
+                return false;
             }
         } else {
             if (buf.ndim() == 1) {
