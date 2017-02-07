@@ -22,6 +22,8 @@
 #  endif
 #endif
 
+#include <numpy/ndarraytypes.h>
+
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 
@@ -53,13 +55,14 @@ struct type_caster<Type, enable_if_t<is_eigen_dense<Type>::value && !is_eigen_re
     static constexpr bool rowMajor = Type::Flags & Eigen::RowMajorBit;
     static constexpr bool isVector = Type::IsVectorAtCompileTime;
 
-    bool load(handle src, bool) {
+    using value_conv = make_caster<Scalar>;
+
+    bool load(handle src, bool convert) {
         auto buf = array_t<Scalar>::ensure(src);
         if (!buf)
             return false;
 
         if (buf.ndim() == 1) {
-            typedef Eigen::InnerStride<> Strides;
             if (!isVector &&
                 !(Type::RowsAtCompileTime == Eigen::Dynamic &&
                   Type::ColsAtCompileTime == Eigen::Dynamic))
@@ -68,51 +71,114 @@ struct type_caster<Type, enable_if_t<is_eigen_dense<Type>::value && !is_eigen_re
             if (Type::SizeAtCompileTime != Eigen::Dynamic &&
                 buf.shape(0) != (size_t) Type::SizeAtCompileTime)
                 return false;
-
-            Strides::Index n_elts = (Strides::Index) buf.shape(0);
-            Strides::Index unity = 1;
-
-            value = Eigen::Map<Type, 0, Strides>(
-                buf.mutable_data(),
-                rowMajor ? unity : n_elts,
-                rowMajor ? n_elts : unity,
-                Strides(buf.strides(0) / sizeof(Scalar))
-            );
         } else if (buf.ndim() == 2) {
             typedef Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic> Strides;
 
             if ((Type::RowsAtCompileTime != Eigen::Dynamic && buf.shape(0) != (size_t) Type::RowsAtCompileTime) ||
                 (Type::ColsAtCompileTime != Eigen::Dynamic && buf.shape(1) != (size_t) Type::ColsAtCompileTime))
                 return false;
-
-            value = Eigen::Map<Type, 0, Strides>(
-                buf.mutable_data(),
-                typename Strides::Index(buf.shape(0)),
-                typename Strides::Index(buf.shape(1)),
-                Strides(buf.strides(rowMajor ? 0 : 1) / sizeof(Scalar),
-                        buf.strides(rowMajor ? 1 : 0) / sizeof(Scalar))
-            );
         } else {
             return false;
+        }
+
+        if (npy_format_descriptor<Scalar>::value == npy_api::NPY_OBJECT_) {
+            value_conv conv;
+
+            if (Type::RowsAtCompileTime == Eigen::Dynamic || Type::ColsAtCompileTime == Eigen::Dynamic)
+                value.resize(buf.shape(0), buf.shape(1));
+
+            if (buf.ndim() == 1) {
+                for (size_t i = 0; i < buf.shape(0); ++i) {
+                    auto p = buf.mutable_data(i);
+                    if (!conv.load(PyArray_GETITEM(buf.ptr(), p), convert))
+                        return false;
+                    value(i) = cast_op<Scalar>(conv);
+                }
+            } else {
+                for (size_t i = 0; i < buf.shape(0); ++i) {
+                    for (size_t j = 0; j < buf.shape(1); ++j) {
+                        auto p = buf.mutable_data(i, j);
+                        if (!conv.load(PyArray_GETITEM(buf.ptr(), p), convert))
+                            return false;
+                        value(i, j) = cast_op<Scalar>(conv);
+                    }
+                }
+            }
+        } else {
+            if (buf.ndim() == 1) {
+                typedef Eigen::InnerStride<> Strides;
+
+                Strides::Index n_elts = (Strides::Index) buf.shape(0);
+                Strides::Index unity = 1;
+
+                value = Eigen::Map<Type, 0, Strides>(
+                    buf.mutable_data(),
+                    rowMajor ? unity : n_elts,
+                    rowMajor ? n_elts : unity,
+                    Strides(buf.strides(0) / sizeof(Scalar))
+                );
+            } else {
+                typedef Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic> Strides;
+
+                value = Eigen::Map<Type, 0, Strides>(
+                    buf.mutable_data(),
+                    typename Strides::Index(buf.shape(0)),
+                    typename Strides::Index(buf.shape(1)),
+                    Strides(buf.strides(rowMajor ? 0 : 1) / sizeof(Scalar),
+                            buf.strides(rowMajor ? 1 : 0) / sizeof(Scalar))
+                );
+            }
         }
         return true;
     }
 
-    static handle cast(const Type &src, return_value_policy /* policy */, handle /* parent */) {
-        if (isVector) {
-            return array(
-                { (size_t) src.size() },                                      // shape
-                { sizeof(Scalar) * static_cast<size_t>(src.innerStride()) },  // strides
-                src.data()                                                    // data
-            ).release();
+    static handle cast(const Type &src, return_value_policy policy, handle parent) {
+        if (npy_format_descriptor<Scalar>::value == npy_api::NPY_OBJECT_) {
+            if (isVector) {
+                array a(
+                    npy_format_descriptor<Scalar>::dtype(),         // type
+                    { (size_t) src.size() }                         // shape
+                );
+                for (size_t i = 0; i < src.size(); ++i) {
+                    auto value_ = reinterpret_steal<object>(value_conv::cast(src.coeff(i, 0), policy, parent));
+                    if (!value_)
+                        return handle();
+                    auto p = a.mutable_data(i);
+                    PyArray_SETITEM(a.ptr(), p, value_.release().ptr()); // steals a reference
+                }
+                return a.release();
+            } else {
+                array a(
+                    npy_format_descriptor<Scalar>::dtype(),         // type
+                    { (size_t) src.rows(), (size_t) src.cols() }    // shape
+                );
+                for (size_t i = 0; i < src.rows(); ++i) {
+                    for (size_t j = 0; j < src.cols(); ++j) {
+                        auto value_ = reinterpret_steal<object>(value_conv::cast(src.coeff(i, j), policy, parent));
+                        if (!value_)
+                            return handle();
+                        auto p = a.mutable_data(i, j);
+                        PyArray_SETITEM(a.ptr(), p, value_.release().ptr()); // steals a reference
+                    }
+                }
+                return a.release();
+            }
         } else {
-            return array(
-                { (size_t) src.rows(),                                        // shape
-                  (size_t) src.cols() },
-                { sizeof(Scalar) * static_cast<size_t>(src.rowStride()),      // strides
-                  sizeof(Scalar) * static_cast<size_t>(src.colStride()) },
-                src.data()                                                    // data
-            ).release();
+            if (isVector) {
+                return array(
+                    { (size_t) src.size() },                                      // shape
+                    { sizeof(Scalar) * static_cast<size_t>(src.innerStride()) },  // strides
+                    src.data()                                                    // data
+                ).release();
+            } else {
+                return array(
+                    { (size_t) src.rows(),                                        // shape
+                      (size_t) src.cols() },
+                    { sizeof(Scalar) * static_cast<size_t>(src.rowStride()),      // strides
+                      sizeof(Scalar) * static_cast<size_t>(src.colStride()) },
+                    src.data()                                                    // data
+                ).release();
+            }
         }
     }
 
