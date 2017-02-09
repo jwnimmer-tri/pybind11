@@ -129,6 +129,7 @@ if (PYBIND11_INSTALL)
                 ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
                 tools/FindPythonLibsNew.cmake
                 tools/pybind11Tools.cmake
+                tools/FindNumPy.cmake
           DESTINATION ${PYBIND11_CMAKECONFIG_INSTALL_DIR})
 
   if(NOT (CMAKE_VERSION VERSION_LESS 3.0))
