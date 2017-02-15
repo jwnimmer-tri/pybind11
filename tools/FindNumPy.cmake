@@ -14,6 +14,7 @@
 
 #============================================================================
 # Copyright 2012 Continuum Analytics, Inc.
+# Copyright 2017 Robot Locomotion Group @ CSAIL
 #
 # MIT License
 #
@@ -39,63 +40,69 @@
 #============================================================================
 
 # Finding NumPy involves calling the Python interpreter
-if(NumPy_FIND_REQUIRED)
-    find_package(PythonInterp REQUIRED)
+if(NumPy_FIND_QUIETLY)
+  set(_NUMPY_FIND_QUIET QUIET)
 else()
-    find_package(PythonInterp)
+  set(_NUMPY_FIND_QUIET)
+endif()
+if(NumPy_FIND_QUIETLY)
+  set(_NUMPY_FIND_REQUIRED REQUIRED)
+else()
+  set(_NUMPY_FIND_REQUIRED)
 endif()
 
-if(NOT PYTHONINTERP_FOUND)
-    set(NUMPY_FOUND FALSE)
-    return()
-endif()
+find_package(PythonInterp ${_NUMPY_FIND_REQUIRED} ${_NUMPY_FIND_QUIET})
 
-execute_process(COMMAND "${PYTHON_EXECUTABLE}" "-c"
+if(PYTHONINTERP_FOUND)
+  execute_process(COMMAND "${PYTHON_EXECUTABLE}" "-c"
     "import numpy as n; print(n.__version__); print(n.get_include());"
-    RESULT_VARIABLE _NUMPY_SEARCH_SUCCESS
-    OUTPUT_VARIABLE _NUMPY_VALUES_OUTPUT
-    ERROR_VARIABLE _NUMPY_ERROR_VALUE
+    RESULT_VARIABLE _NUMPY_SEARCH_RESULT
+    OUTPUT_VARIABLE _NUMPY_SEARCH_OUTPUT
+    ERROR_VARIABLE _NUMPY_SEARCH_ERROR
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-if(NOT _NUMPY_SEARCH_SUCCESS MATCHES 0)
-    if(NumPy_FIND_REQUIRED)
-        message(FATAL_ERROR
-            "NumPy import failure:\n${_NUMPY_ERROR_VALUE}")
+  if(NOT _NUMPY_SEARCH_RESULT EQUAL 0)
+    set(_NUMPY_FAIL_MESSAGE
+      FAIL_MESSAGE "NumPy import failure: ${_NUMPY_SEARCH_ERROR}")
+  else()
+    # Convert the process output into a list
+    string(REGEX REPLACE ";" "\\\\;" _NUMPY_VALUES ${_NUMPY_SEARCH_OUTPUT})
+    string(REGEX REPLACE "\n" ";" _NUMPY_VALUES ${_NUMPY_VALUES})
+
+    # Read from end, just in case there is unexpected output
+    list(GET _NUMPY_VALUES -2 NUMPY_VERSION)
+
+    if(NOT "${NUMPY_VERSION}" MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+      # The output from Python was unexpected
+      set(_NUMPY_FAIL_MESSAGE
+        FAIL_MESSAGE "Requested version and include path from NumPy, got instead:\n${_NUMPY_SEARCH_OUTPUT}\n")
+    else()
+      # Get the major and minor version numbers
+      set(NUMPY_VERSION_MAJOR "${CMAKE_MATCH_1}")
+      set(NUMPY_VERSION_MINOR "${CMAKE_MATCH_2}")
+      set(NUMPY_VERSION_PATCH "${CMAKE_MATCH_3}")
+      math(EXPR NUMPY_VERSION_DECIMAL
+          "(${NUMPY_VERSION_MAJOR} * 10000) + (${NUMPY_VERSION_MINOR} * 100) + ${NUMPY_VERSION_PATCH}")
+
+      # Get include directory and make sure all directory separators are '/'
+      list(GET _NUMPY_VALUES -1 NUMPY_INCLUDE_DIRS)
+      file(TO_CMAKE_PATH NUMPY_INCLUDE_DIRS "${NUMPY_INCLUDE_DIRS}")
     endif()
-    set(NUMPY_FOUND FALSE)
-    return()
+  endif()
 endif()
 
-# Convert the process output into a list
-string(REGEX REPLACE ";" "\\\\;" _NUMPY_VALUES ${_NUMPY_VALUES_OUTPUT})
-string(REGEX REPLACE "\n" ";" _NUMPY_VALUES ${_NUMPY_VALUES})
-# Just in case there is unexpected output from the Python command.
-list(GET _NUMPY_VALUES -2 NUMPY_VERSION)
-list(GET _NUMPY_VALUES -1 NUMPY_INCLUDE_DIRS)
+find_package_handle_standard_args(NumPy
+  ${_NUMPY_FAIL_MESSAGE}
+  REQUIRED_VARS PYTHONINTERP_FOUND NUMPY_INCLUDE_DIRS
+  VERSION_VAR NUMPY_VERSION)
 
-string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" _VER_CHECK "${NUMPY_VERSION}")
-if("${_VER_CHECK}" STREQUAL "")
-    # The output from Python was unexpected. Raise an error always
-    # here, because we found NumPy, but it appears to be corrupted somehow.
-    message(FATAL_ERROR
-        "Requested version and include path from NumPy, got instead:\n${_NUMPY_VALUES_OUTPUT}\n")
-    return()
+if(NOT DEFINED NumPy_FOUND)
+  # Before CMake 3.3, FPHSA only sets the all-upper-case FOUND_VAR
+  set(NumPy_FOUND ${NUMPY_FOUND})
 endif()
 
-# Make sure all directory separators are '/'
-string(REGEX REPLACE "\\\\" "/" NUMPY_INCLUDE_DIRS ${NUMPY_INCLUDE_DIRS})
-
-# Get the major and minor version numbers
-string(REGEX REPLACE "\\." ";" _NUMPY_VERSION_LIST ${NUMPY_VERSION})
-list(GET _NUMPY_VERSION_LIST 0 NUMPY_VERSION_MAJOR)
-list(GET _NUMPY_VERSION_LIST 1 NUMPY_VERSION_MINOR)
-list(GET _NUMPY_VERSION_LIST 2 NUMPY_VERSION_PATCH)
-string(REGEX MATCH "[0-9]*" NUMPY_VERSION_PATCH ${NUMPY_VERSION_PATCH})
-math(EXPR NUMPY_VERSION_DECIMAL
-    "(${NUMPY_VERSION_MAJOR} * 10000) + (${NUMPY_VERSION_MINOR} * 100) + ${NUMPY_VERSION_PATCH}")
-
-find_package_message(NUMPY
-    "Found NumPy: version \"${NUMPY_VERSION}\" ${NUMPY_INCLUDE_DIRS}"
-    "${NUMPY_INCLUDE_DIRS}${NUMPY_VERSION}")
-
-set(NUMPY_FOUND TRUE)
+if(NUMPY_FOUND)
+  find_package_message(NUMPY
+      "Found NumPy: ${NUMPY_INCLUDE_DIRS} (found version \"${NUMPY_VERSION}\")"
+      "${NUMPY_INCLUDE_DIRS}${NUMPY_VERSION}")
+endif()
