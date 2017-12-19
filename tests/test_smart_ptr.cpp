@@ -40,7 +40,8 @@ template <typename T> class huge_unique_ptr {
     uint64_t padding[10];
 public:
     huge_unique_ptr(T *p) : ptr(p) {};
-    T *get() { return ptr.get(); }
+    T *get() const { return ptr.get(); }
+    T* release() { return ptr.release(); }
 };
 PYBIND11_DECLARE_HOLDER_TYPE(T, huge_unique_ptr<T>);
 
@@ -51,7 +52,7 @@ class custom_unique_ptr {
 public:
     custom_unique_ptr(T* p) : impl(p) { }
     T* get() const { return impl.get(); }
-    T* release_ptr() { return impl.release(); }
+    T* release() { return impl.release(); }
 };
 PYBIND11_DECLARE_HOLDER_TYPE(T, custom_unique_ptr<T>);
 
@@ -266,5 +267,48 @@ TEST_SUBMODULE(smart_ptr, m) {
             for (auto &e : el.l)
                 list.append(py::cast(e));
             return list;
+        });
+
+    class UniquePtrHeld {
+    public:
+        UniquePtrHeld() = delete;
+        UniquePtrHeld(const UniquePtrHeld&) = delete;
+        UniquePtrHeld(UniquePtrHeld&&) = delete;
+
+        UniquePtrHeld(int value)
+            : value_(value) {
+            print_created(this, value);
+        }
+        ~UniquePtrHeld() {
+            print_destroyed(this);
+        }
+        int value() const { return value_; }
+    private:
+        int value_{};
+    };
+    py::class_<UniquePtrHeld>(m, "UniquePtrHeld")
+        .def(py::init<int>())
+        .def("value", &UniquePtrHeld::value);
+
+    m.def("unique_ptr_pass_through",
+        [](std::unique_ptr<UniquePtrHeld> obj) {
+            return std::move(obj);
+        });
+    m.def("unique_ptr_terminal",
+        [](std::unique_ptr<UniquePtrHeld> obj) {
+            obj.reset();
+            return nullptr;
+        });
+
+    class SharedPtrHeld { int value = 0; };
+    py::class_<SharedPtrHeld, std::shared_ptr<SharedPtrHeld>>(m, "SharedPtrHeld")
+        .def(py::init<>());
+    m.def("shared_ptr_held_in_unique_ptr",
+        []() {
+            return std::make_unique<SharedPtrHeld>();
+        });
+    m.def("shared_ptr_held_func",
+        [](std::shared_ptr<SharedPtrHeld> obj) {
+            return obj != nullptr;
         });
 }
