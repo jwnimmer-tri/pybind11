@@ -1865,6 +1865,7 @@ template <typename T> struct move_if_unreferenced<T, enable_if_t<all_of<
     move_is_plain_type<T>,
     negation<move_always<T>>,
     std::is_move_constructible<T>,
+    std::is_copy_constructible<T>,
     std::is_same<decltype(std::declval<make_caster<T>>().operator T&()), T&>
 >::value>> : std::true_type {};
 template <typename T> using move_never = none_of<move_always<T>, move_if_unreferenced<T>>;
@@ -1940,7 +1941,7 @@ template <> inline void handle::cast() const { return; }
 template <typename T>
 detail::enable_if_t<
         // TODO(eric.cousineau): Figure out how to prevent perfect-forwarding more elegantly.
-        /*std::is_rvalue_reference<T>::value &&*/ !detail::is_pyobject<T>::value, object>
+        /*std::is_rvalue_reference<T>::value &&*/ !detail::is_pyobject<detail::intrinsic_t<T>>::value, object>
     move(T&& value) {
     // TODO(eric.cousineau): Add policies, parent, etc.
     // It'd be nice to supply a parent, but for now, just leave it as-is.
