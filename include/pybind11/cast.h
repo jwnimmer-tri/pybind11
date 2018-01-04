@@ -553,6 +553,8 @@ inline LoadType determine_load_type(handle src, const type_info* typeinfo,
     }
 }
 
+inline void clear_patients(PyObject *self);
+
 class type_caster_generic {
 public:
     PYBIND11_NOINLINE type_caster_generic(const std::type_info &type_info)
@@ -578,6 +580,7 @@ public:
             return none().release();
 
         const bool take_ownership = policy == return_value_policy::automatic || policy == return_value_policy::take_ownership;
+        bool do_clear_patients = false;
         // We only come across `!existing_holder` if we are coming from `cast` and not `cast_holder`.
         const bool is_bare_ptr = !existing_holder.ptr() && existing_holder.type_id() == HolderTypeId::Unknown;
 
@@ -592,6 +595,10 @@ public:
                         switch (instance_type->release_info.holder_type_id) {
                             case detail::HolderTypeId::UniquePtr: {
                                 try_to_reclaim = take_ownership;
+                                if (take_ownership) {
+                                    // If pybind is taking ownership, then we can release all patients that have this as a nurse.
+                                    do_clear_patients = true;
+                                }
                                 break;
                             }
                             case detail::HolderTypeId::SharedPtr: {
@@ -680,6 +687,7 @@ public:
                 valueptr = src;
                 wrapper->owned = false;
                 keep_alive_impl(inst, parent);
+                assert(!do_clear_patients);
                 break;
 
             default:
@@ -688,7 +696,12 @@ public:
 
         // TODO(eric.cousineau): Propagate `holder_erased` through this chain.
         tinfo->init_instance(wrapper, existing_holder);
-        return inst.release();
+        handle h = inst.release();
+        if (do_clear_patients) {
+            // Clear patients if needed.
+            clear_patients(h.ptr());
+        }
+        return h;
     }
 
     // Base methods for generic caster; there are overridden in copyable_holder_caster
