@@ -1939,13 +1939,22 @@ template <> inline void handle::cast() const { return; }
 
 template <typename T>
 detail::enable_if_t<
-        !detail::is_pyobject<T>::value, object>
+        // TODO(eric.cousineau): Figure out how to prevent perfect-forwarding more elegantly.
+        /*std::is_rvalue_reference<T>::value &&*/ !detail::is_pyobject<T>::value, object>
     move(T&& value) {
+    // TODO(eric.cousineau): Add policies, parent, etc.
     // It'd be nice to supply a parent, but for now, just leave it as-is.
     handle no_parent;
     return reinterpret_steal<object>(
         detail::make_caster<T>::cast(std::move(value), return_value_policy::take_ownership, no_parent));
 }
+
+// template <typename T>
+// detail::enable_if_t<
+//         std::is_rvalue_reference<T>::value && !detail::is_pyobject<T>::value, object>
+//     cast(T&& value) {
+//     return move<T>(std::move(value));
+// }
 
 template <typename T>
 detail::enable_if_t<!detail::move_never<T>::value, T> move(object &&obj) {
