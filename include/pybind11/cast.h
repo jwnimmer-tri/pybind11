@@ -1973,7 +1973,7 @@ detail::enable_if_t<!detail::move_never<T>::value, T> move(object &&obj) {
 #endif
 
     // Move into a temporary and return that, because the reference may be a local value of `conv`
-    T ret = std::move(detail::load_type<T>(obj).operator T&());
+    T ret = std::move(detail::cast_op<T>(detail::load_type<T>(obj)));
     return ret;
 }
 
