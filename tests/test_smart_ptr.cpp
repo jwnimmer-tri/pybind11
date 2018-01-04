@@ -386,6 +386,11 @@ TEST_SUBMODULE(smart_ptr, m) {
             // std::is_same<intrinsic_t<cast_op_type>, T>::value,
             move_common<T>::value,  // good
             "This must always be true.");
+
+        py::object obj;
+        static_assert(
+            std::is_rvalue_reference<decltype(std::move(obj))>::value,
+            "This must always be true, too.");
     }
 
     // Guarantee API works as expected.
@@ -408,11 +413,11 @@ TEST_SUBMODULE(smart_ptr, m) {
             return obj_py;
         });
 
-    // m.def("unique_ptr_pass_through_cast_to_py",
-    //     [](std::unique_ptr<UniquePtrHeld> obj) {
-    //         py::object obj_py = py::cast(std::move(obj));
-    //         return obj_py;
-    //     });
+    m.def("unique_ptr_pass_through_cast_to_py",
+        [](std::unique_ptr<UniquePtrHeld> obj) {
+            py::object obj_py = py::cast(std::move(obj));
+            return obj_py;
+        });
 
     Container<UniquePtrHeld, KeepAliveType::Plain>::def(
         m, "ContainerPlain");
