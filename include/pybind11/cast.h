@@ -1670,9 +1670,10 @@ struct move_only_holder_caster : type_caster_base<type> {
 
   // Disable these?
 //  explicit operator type*() { return this->value; }
-//  explicit operator type&() { return *(this->value); }
+ // explicit operator type&() { return *(this->value); }
 
-//  explicit operator holder_type*() { return &holder; }
+  // This is needed to satisfy the `move_common` trait.
+  // explicit operator holder_type&() { return &holder; }
 
   // Force rvalue.
   template <typename T>
@@ -1866,7 +1867,8 @@ template <typename T> struct move_always<T, enable_if_t<all_of<
 >::value>> : std::true_type {};
 template <typename T, typename SFINAE = void> struct move_if_unreferenced : std::false_type {};
 template <typename T> struct move_if_unreferenced<T, enable_if_t<all_of<
-    move_common<T>
+    move_common<T>,
+    is_copy_constructible<T>
 >::value>> : std::true_type {};
 template <typename T> using move_never = negation<move_common<T>>;
 
@@ -1941,7 +1943,7 @@ template <> inline void handle::cast() const { return; }
 template <typename T>
 detail::enable_if_t<
         // TODO(eric.cousineau): Figure out how to prevent perfect-forwarding more elegantly.
-        /*std::is_rvalue_reference<T>::value &&*/ !detail::is_pyobject<detail::intrinsic_t<T>>::value, object>
+        std::is_rvalue_reference<T>::value && !detail::is_pyobject<detail::intrinsic_t<T>>::value, object>
     move(T&& value) {
     // TODO(eric.cousineau): Add policies, parent, etc.
     // It'd be nice to supply a parent, but for now, just leave it as-is.
@@ -1950,12 +1952,12 @@ detail::enable_if_t<
         detail::make_caster<T>::cast(std::move(value), return_value_policy::take_ownership, no_parent));
 }
 
-// template <typename T>
-// detail::enable_if_t<
-//         std::is_rvalue_reference<T>::value && !detail::is_pyobject<T>::value, object>
-//     cast(T&& value) {
-//     return move<T>(std::move(value));
-// }
+template <typename T>
+detail::enable_if_t<
+        std::is_rvalue_reference<T>::value && !detail::is_pyobject<T>::value, object>
+    cast(T&& value) {
+    return move<T>(std::move(value));
+}
 
 template <typename T>
 detail::enable_if_t<!detail::move_never<T>::value, T> move(object &&obj) {

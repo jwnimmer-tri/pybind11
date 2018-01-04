@@ -377,17 +377,22 @@ TEST_SUBMODULE(smart_ptr, m) {
         });
 
     // Guarantee API works as expected.
-    m.def("unique_ptr_pass_through_cast_from_py",
-        [](py::object obj_py) {
-            auto obj =
-                py::cast<std::unique_ptr<UniquePtrHeld>>(std::move(obj_py));
-            return obj;
-        });
+    // m.def("unique_ptr_pass_through_cast_from_py",
+    //     [](py::object obj_py) {
+    //         auto obj =
+    //             py::cast<std::unique_ptr<UniquePtrHeld>>(std::move(obj_py));
+    //         return obj;
+    //     });
+
     {
-        using Ptr = std::unique_ptr<UniquePtrHeld>;
+        using namespace py::detail;
+        using T = std::unique_ptr<UniquePtrHeld>;
+        using cast_op_type = typename make_caster<T>::template cast_op_type<T>;
         static_assert(
-            py::detail::move_is_plain_type<Ptr>::value,
-            // py::detail::move_common<Ptr>::value,
+            // move_is_plain_type<T>::value, // good
+            // std::is_move_constructible<T>::value,  // good
+            std::is_same<intrinsic_t<cast_op_type>, T>::value,
+            // move_common<T>::value,  // bad
             "This must always be true.");
     }
     // m.def("unique_ptr_pass_through_move_from_py",
@@ -401,11 +406,12 @@ TEST_SUBMODULE(smart_ptr, m) {
     //         py::object obj_py = py::cast(std::move(obj));
     //         return obj_py;
     //     });
-    m.def("unique_ptr_pass_through_move_to_py",
-        [](std::unique_ptr<UniquePtrHeld> obj) {
-            py::object obj_py = py::move(std::move(obj));
-            return obj_py;
-        });
+
+    // m.def("unique_ptr_pass_through_move_to_py",
+    //     [](std::unique_ptr<UniquePtrHeld> obj) {
+    //         py::object obj_py = py::move(std::move(obj));
+    //         return obj_py;
+    //     });
 
     Container<UniquePtrHeld, KeepAliveType::Plain>::def(
         m, "ContainerPlain");
