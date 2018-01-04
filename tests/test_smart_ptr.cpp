@@ -101,15 +101,15 @@ public:
     using Ptr = std::unique_ptr<T>;
     Container(Ptr ptr)
         : ptr_(std::move(ptr)) {
-        // if (keep_alive_type == KeepAliveType::ExposeOwnership) {
-        //     expose_ownership(ptr_, this);
-        // }
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            expose_ownership(ptr_, this);
+        }
         print_created(this);
     }
     ~Container() {
-        // if (keep_alive_type == KeepAliveType::ExposeOwnership) {
-        //     release_ownership(std::move(ptr_));
-        // }
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            release_ownership(std::move(ptr_));
+        }
         print_destroyed(this);
     }
     T* get() const { return ptr_.get(); }
@@ -423,8 +423,8 @@ TEST_SUBMODULE(smart_ptr, m) {
         m, "ContainerPlain");
     Container<UniquePtrHeld, KeepAliveType::KeepAlive>::def(
         m, "ContainerKeepAlive");
-    // Container<UniquePtrHeld, KeepAliveType::ExposeOwnership>::def(
-    //     m, "ContainerExposeOwnership");
+    Container<UniquePtrHeld, KeepAliveType::ExposeOwnership>::def(
+        m, "ContainerExposeOwnership");
 
     // Ensure class is non-empty, so it's easier to detect double-free
     // corruption. (If empty, this may be harder to see easily.)

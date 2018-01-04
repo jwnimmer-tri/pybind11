@@ -253,10 +253,9 @@ def test_unique_ptr_arg():
 def test_unique_ptr_keep_alive():
     obj_stats = ConstructorStats.get(m.UniquePtrHeld)
     c_plain_stats = ConstructorStats.get(m.ContainerPlain)
-    c_keep_stats = ConstructorStats.get(m.ContainerKeepAlive)
 
     # Try with plain container.
-    obj = m.UniquePtrHeld(1)
+    obj = m.UniquePtrHeld(0)
     c_plain = m.ContainerPlain(obj)
     c_plain_wref = weakref.ref(c_plain)
     assert obj_stats.alive() == 1
@@ -269,23 +268,27 @@ def test_unique_ptr_keep_alive():
     assert obj_stats.alive() == 0
     del obj
 
-    # Now try with keep-alive container.
-    obj = m.UniquePtrHeld(1)
-    c_keep = m.ContainerKeepAlive(obj)
-    c_keep_wref = weakref.ref(c_keep)
-    assert obj_stats.alive() == 1
-    assert c_keep_stats.alive() == 1
-    del c_keep
-    pytest.gc_collect()
-    # Everything should have stayed alive.
-    assert c_keep_wref() is not None
-    assert c_keep_stats.alive() == 1
-    assert obj_stats.alive() == 1
-    # Now release the object. This should have released the container as a patient.
-    c_keep_wref().release()
-    pytest.gc_collect()
-    assert obj_stats.alive() == 1
-    assert c_keep_stats.alive() == 0
+    # Now try with keep-alive containers.
+    for i, keep_cls in enumerate([m.ContainerKeepAlive, m.ContainerExposeOwnership]):
+        c_keep_stats = ConstructorStats.get(keep_cls)
+        obj = m.UniquePtrHeld(i + 1)
+        c_keep = keep_cls(obj)
+        c_keep_wref = weakref.ref(c_keep)
+        assert obj_stats.alive() == 1
+        assert c_keep_stats.alive() == 1
+        del c_keep
+        pytest.gc_collect()
+        # Everything should have stayed alive.
+        assert c_keep_wref() is not None
+        assert c_keep_stats.alive() == 1
+        assert obj_stats.alive() == 1
+        # Now release the object. This should have released the container as a patient.
+        c_keep_wref().release()
+        pytest.gc_collect()
+        assert obj_stats.alive() == 1
+        assert c_keep_stats.alive() == 0
+        del obj
+        pytest.gc_collect()
 
 
 def test_unique_ptr_to_shared_ptr():
