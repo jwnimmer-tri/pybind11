@@ -557,57 +557,56 @@ inline void clear_patients(PyObject *self);
 
 
 // Get the instance for a given type, if it exists.
-const instance* cast_existing_erased(
-        const void* _src, std::type_info* cpptype) {
+std::pair<instance*, detail::type_info*> cast_existing_erased(
+        const void* _src, const std::type_info* cpptype) {
     void *src = const_cast<void*>(_src);
     auto it_instances = get_internals().registered_instances.equal_range(src);
     for (auto it_i = it_instances.first; it_i != it_instances.second; ++it_i) {
         for (auto instance_type : detail::all_type_info(Py_TYPE(it_i->second))) {
             if (instance_type && same_type(*instance_type->cpptype, *cpptype)) {
-                instance* const inst = it_i->second;
-                return inst;
+                instance* inst = it_i->second;
+                return {inst, instance_type};
             }
         }
     }
-    return nullptr;
+    return {nullptr, nullptr};
 }
 
 template <typename T>
 handle cast_existing(const T* src) {
-    return handle((PyObject*) cast_existing_erased(src, &typeid(T)));
+    return handle((PyObject*) cast_existing_erased(src, &typeid(T)).first);
 }
 
 handle cast_existing_check_for_reclaim(
-        const instance* inst, bool is_bare_ptr, holder_erased existing_holder) {
+        instance* inst, detail::type_info* instance_type, holder_erased existing_holder,
+        bool is_bare_ptr, bool take_ownership) {
     handle h((PyObject *)inst);
-    detail::type_info *instance_type = inst->tinfo;
-
+    if (is_bare_ptr) {
+        return h.inc_ref();
+    }
     bool try_to_reclaim = false;
-    if (!is_bare_ptr) {
-        switch (instance_type->release_info.holder_type_id) {
-            case detail::HolderTypeId::UniquePtr: {
-                try_to_reclaim = take_ownership;
-                if (take_ownership) {
-                    // If pybind is taking ownership, then we can release all patients that have this as a nurse.
-                    clear_patients(h.ptr());
+    switch (instance_type->release_info.holder_type_id) {
+        case detail::HolderTypeId::UniquePtr: {
+            try_to_reclaim = take_ownership;
+            if (take_ownership) {
+                // If pybind is taking ownership, then we can release all patients that have this as a nurse.
+                clear_patients(h.ptr());
+            }
+            break;
+        }
+        case detail::HolderTypeId::SharedPtr: {
+            if (take_ownership) {
+                // Only try to reclaim the object if (a) it is not owned and (b) has no holder.
+                if (!inst->simple_holder_constructed) {
+                    assert(!inst->owned && "Unknown state?");
+                    try_to_reclaim = true;
                 }
-                break;
             }
-            case detail::HolderTypeId::SharedPtr: {
-                if (take_ownership) {
-                    // Only try to reclaim the object if (a) it is not owned and (b) has no holder.
-                    if (!inst->simple_holder_constructed) {
-                        if (inst->owned)
-                            throw std::runtime_error("Internal error?");
-                        try_to_reclaim = true;
-                    }
-                }
-                break;
-            }
-            default: {
-                // Otherwise, do not try any reclaiming.
-                break;
-            }
+            break;
+        }
+        default: {
+            // Otherwise, do not try any reclaiming.
+            break;
         }
     }
     if (try_to_reclaim) {
@@ -618,19 +617,13 @@ handle cast_existing_check_for_reclaim(
 
         // TODO(eric.cousineau): This may be still be desirable if this is a raw pointer...
         // Need to think of a desirable workflow - and if there is possible interop.
-        if (!existing_holder) {
-            throw std::runtime_error("Internal error: Should have non-null holder.");
-        }
+        assert(existing_holder && "Should have non-null holder");
         // TODO(eric.cousineau): This field may not be necessary if the lowest-level type is valid.
         // See `move_only_holder_caster::load_value`.
-        if (!inst->reclaim_from_cpp) {
-            throw std::runtime_error("Instance is registered but does not have a registered reclaim method. Internal error?");
-        }
+        assert(inst->reclaim_from_cpp && "Instance is registered but does not have a registered reclaim method");
         return inst->reclaim_from_cpp(inst, existing_holder).release();
     } else {
-        // TODO(eric.cousineau): Should really check that ownership is consistent.
-        // e.g. if we say to take ownership of a pointer that is passed, does not have a holder...
-        // In the end, pybind11 would let ownership slip, and leak memory, possibly violating RAII (if someone is using that...)
+        // Follow nominal operation.
         return h.inc_ref();
     }
 }
@@ -664,11 +657,12 @@ public:
         // We only come across `!existing_holder` if we are coming from `cast` and not `cast_holder`.
         const bool is_bare_ptr = !existing_holder.ptr() && existing_holder.type_id() == HolderTypeId::Unknown;
 
-        auto it_instances = get_internals().registered_instances.equal_range(src);
-        const instance* inst_existing = cast_existing_erased(src, tinfo->cpptype);
+        std::pair<instance*, detail::type_info*> existing_pair =
+            cast_existing_erased(src, tinfo->cpptype);
         // TODO: What about needing to cast for polymorphic types???
-        if (inst_existing) {
-            return cast_existing_check_for_reclaim(inst_existing, is_bare_ptr, existing_holder);
+        if (existing_pair.first) {
+            return cast_existing_check_for_reclaim(
+                existing_pair.first, existing_pair.second, existing_holder, is_bare_ptr, take_ownership);
         }
 
         // Otherwise, we should go ahead and register the instance.
