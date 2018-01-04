@@ -386,7 +386,7 @@ TEST_SUBMODULE(smart_ptr, m) {
     m.def("unique_ptr_pass_through_move_from_py",
         [](py::object obj_py) {
             auto obj =
-                py::move<std::unique_ptr<UniquePtrHeld>>(std::move(obj_py));
+                py::move<std::unique_ptr<UniquePtrHeld>>(static_cast<py::object&&>(obj_py)); //std::move(obj_py));
             return obj;
         });
     // m.def("unique_ptr_pass_through_cast_to_py",
