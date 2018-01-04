@@ -273,10 +273,7 @@ def test_unique_ptr_keep_alive():
     # del obj
 
     # Now try with keep-alive containers.
-    # for i, keep_cls in enumerate([m.ContainerKeepAlive, m.ContainerExposeOwnership]):
-    keep_cls = m.ContainerExposeOwnership
-    i = 1
-    if True:
+    for i, keep_cls in enumerate([m.ContainerKeepAlive, m.ContainerExposeOwnership]):
         c_keep_stats = ConstructorStats.get(keep_cls)
         obj = m.UniquePtrHeld(i + 1)
         print("create")
