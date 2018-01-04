@@ -1858,7 +1858,9 @@ template <typename T, typename SFINAE = void> struct move_common : std::false_ty
 template <typename T> struct move_common<T, enable_if_t<all_of<
     move_is_plain_type<T>,
     std::is_move_constructible<T>,
-    std::is_same<decltype(std::declval<make_caster<T>>().operator T&()), T&>
+    std::is_same<
+        intrinsic_t<typename make_caster<T>::template cast_op_type<T&>>,
+        T>
 >::value>> : std::true_type {};
 template <typename T, typename SFINAE = void> struct move_always : std::false_type {};
 template <typename T> struct move_always<T, enable_if_t<all_of<

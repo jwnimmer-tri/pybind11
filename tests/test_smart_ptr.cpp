@@ -391,8 +391,8 @@ TEST_SUBMODULE(smart_ptr, m) {
         static_assert(
             // move_is_plain_type<T>::value, // good
             // std::is_move_constructible<T>::value,  // good
-            std::is_same<intrinsic_t<cast_op_type>, T>::value,
-            // move_common<T>::value,  // bad
+            // std::is_same<intrinsic_t<cast_op_type>, T>::value,
+            move_common<T>::value,  // good
             "This must always be true.");
     }
     // m.def("unique_ptr_pass_through_move_from_py",
