@@ -56,14 +56,60 @@ public:
 };
 PYBIND11_DECLARE_HOLDER_TYPE(T, custom_unique_ptr<T>);
 
-template <typename T, bool do_keep_alive, typename Ptr = std::unique_ptr<T>>
+using std::unique_ptr;
+
+// Returns Python handle to owner.
+template <typename NurseT, typename OwnerT>
+py::object expose_ownership(
+    const unique_ptr<NurseT>& nurse_ptr, const OwnerT* owner,
+    py::object owner_py = {}) {
+    if (nurse_ptr) {
+        py::handle nurse_py = py::detail::cast_existing(nurse_ptr.get());
+        if (nurse_py) {
+            // Expose owner to Python, registering it if needed.
+            // This assumes that the lifetime of the owner is appropriately managed!
+            if (!owner_py) {
+                owner_py = py::cast(owner);
+            }
+            py::detail::add_patient(nurse_py.ptr(), owner_py.ptr());
+            return owner_py;
+        }
+    }
+    // Return empty object.
+    return py::object();
+}
+
+template <typename NurseT>
+void release_ownership(unique_ptr<NurseT> nurse_ptr) {
+    if (nurse_ptr && py::detail::cast_existing(nurse_ptr.get())) {
+        // Release object to be managed by pybind.
+        py::cast(std::move(nurse_ptr));
+    }
+}
+
+enum class KeepAliveType : int {
+    Plain = 0,
+    KeepAlive,
+    ExposeOwnership,
+};
+
+template <
+    typename T,
+    KeepAliveType keep_alive_type>
 class Container {
 public:
+    using Ptr = std::unique_ptr<T>;
     Container(Ptr ptr)
         : ptr_(std::move(ptr)) {
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            expose_ownership(ptr_, this);
+        }
         print_created(this);
     }
     ~Container() {
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            release_ownership(std::move(ptr_));
+        }
         print_destroyed(this);
     }
     T* get() const { return ptr_.get(); }
@@ -71,7 +117,7 @@ public:
 
     static void def(py::module &m, const std::string& name) {
         py::class_<Container> cls(m, name.c_str());
-        if (do_keep_alive) {
+        if (keep_alive_type == KeepAliveType::KeepAlive) {
             cls.def(py::init<Ptr>(), py::keep_alive<2, 1>());
         } else {
             cls.def(py::init<Ptr>());
@@ -330,8 +376,12 @@ TEST_SUBMODULE(smart_ptr, m) {
             return nullptr;
         });
 
-    Container<UniquePtrHeld, true>::def(m, "ContainerKeepAlive");
-    Container<UniquePtrHeld, false>::def(m, "ContainerPlain");
+    Container<UniquePtrHeld, KeepAliveType::Plain>::def(
+        m, "ContainerPlain");
+    Container<UniquePtrHeld, KeepAliveType::KeepAlive>::def(
+        m, "ContainerKeepAlive");
+    Container<UniquePtrHeld, KeepAliveType::ExposeOwnership>::def(
+        m, "ContainerExposeOwnership");
 
     // Ensure class is non-empty, so it's easier to detect double-free
     // corruption. (If empty, this may be harder to see easily.)
