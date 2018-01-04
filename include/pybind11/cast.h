@@ -1956,7 +1956,7 @@ detail::enable_if_t<
 
 template <typename T>
 detail::enable_if_t<
-        std::is_rvalue_reference<T>::value && !detail::is_pyobject<T>::value, object>
+        std::is_rvalue_reference<T>::value && !detail::is_pyobject<detail::intrinsic_t<T>>::value, object>
     cast(T&& value) {
     return move<T>(std::move(value));
 }

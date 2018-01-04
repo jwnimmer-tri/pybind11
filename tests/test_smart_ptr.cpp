@@ -401,15 +401,16 @@ TEST_SUBMODULE(smart_ptr, m) {
                 py::move<std::unique_ptr<UniquePtrHeld>>(static_cast<py::object&&>(obj_py)); //std::move(obj_py));
             return obj;
         });
+
+    m.def("unique_ptr_pass_through_move_to_py",
+        [](std::unique_ptr<UniquePtrHeld> obj) {
+            py::object obj_py = py::move(std::move(obj));
+            return obj_py;
+        });
+
     // m.def("unique_ptr_pass_through_cast_to_py",
     //     [](std::unique_ptr<UniquePtrHeld> obj) {
     //         py::object obj_py = py::cast(std::move(obj));
-    //         return obj_py;
-    //     });
-
-    // m.def("unique_ptr_pass_through_move_to_py",
-    //     [](std::unique_ptr<UniquePtrHeld> obj) {
-    //         py::object obj_py = py::move(std::move(obj));
     //         return obj_py;
     //     });
 
