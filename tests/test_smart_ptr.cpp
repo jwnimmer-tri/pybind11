@@ -376,6 +376,17 @@ TEST_SUBMODULE(smart_ptr, m) {
             return nullptr;
         });
 
+    m.def("unique_ptr_pass_through_cast_from_py",
+        [](py::object obj_py) {
+            auto obj =
+                py::cast<std::unique_ptr<UniquePtrHeld>>(std::move(obj_py));
+            return obj;
+        });
+    // m.def("unique_ptr_pass_through_cast_to_py",
+    //     [](std::unique_ptr<UniquePtrHeld> obj) {
+    //         return py::cast(obj);
+    //     });
+
     Container<UniquePtrHeld, KeepAliveType::Plain>::def(
         m, "ContainerPlain");
     Container<UniquePtrHeld, KeepAliveType::KeepAlive>::def(
