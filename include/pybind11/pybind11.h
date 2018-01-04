@@ -2106,10 +2106,6 @@ void print(Args &&...args) {
     detail::print(c.args(), c.kwargs());
 }
 
-// inline void print_debug(const std::string& out) {
-//     print(out);
-// }
-
 #if defined(WITH_THREAD) && !defined(PYPY_VERSION)
 
 /* The functions below essentially reproduce the PyGILState_* API using a RAII

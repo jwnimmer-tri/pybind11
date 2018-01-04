@@ -32,11 +32,6 @@
 #endif
 
 NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
-
-template <return_value_policy policy = return_value_policy::automatic_reference, typename... Args>
-void print(Args &&...args);
-// inline void print_debug(const std::string& out);
-
 NAMESPACE_BEGIN(detail)
 
 /// A life support system for temporary objects created by `type_caster::load()`.
@@ -603,7 +598,6 @@ public:
                                 try_to_reclaim = take_ownership;
                                 if (take_ownership) {
                                     // If pybind is taking ownership, then we can release all patients that have this as a nurse.
-                                    print("GONNA CLEAR PATIENTS for", h);
                                     clear_patients(h.ptr());
                                 }
                                 break;
@@ -702,8 +696,7 @@ public:
 
         // TODO(eric.cousineau): Propagate `holder_erased` through this chain.
         tinfo->init_instance(wrapper, existing_holder);
-        handle h = inst.release();
-        return h;
+        return inst.release();
     }
 
     // Base methods for generic caster; there are overridden in copyable_holder_caster
