@@ -1938,6 +1938,16 @@ template <typename T> T handle::cast() const { return pybind11::cast<T>(*this); 
 template <> inline void handle::cast() const { return; }
 
 template <typename T>
+detail::enable_if_t<
+        !detail::is_pyobject<T>::value, object>
+    move(T&& value) {
+    // It'd be nice to supply a parent, but for now, just leave it as-is.
+    handle no_parent;
+    return reinterpret_steal<object>(
+        detail::make_caster<T>::cast(std::move(value), return_value_policy::take_ownership, no_parent));
+}
+
+template <typename T>
 detail::enable_if_t<!detail::move_never<T>::value, T> move(object &&obj) {
     if (obj.ref_count() > 1)
 #if defined(NDEBUG)
