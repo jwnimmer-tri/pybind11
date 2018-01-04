@@ -557,7 +557,7 @@ inline void clear_patients(PyObject *self);
 
 
 // Get the instance for a given type, if it exists.
-std::pair<instance*, detail::type_info*> cast_existing_erased(
+inline std::pair<instance*, detail::type_info*> cast_existing_erased(
         const void* _src, const std::type_info* cpptype) {
     void *src = const_cast<void*>(_src);
     auto it_instances = get_internals().registered_instances.equal_range(src);
@@ -573,11 +573,11 @@ std::pair<instance*, detail::type_info*> cast_existing_erased(
 }
 
 template <typename T>
-handle cast_existing(const T* src) {
+inline handle cast_existing(const T* src) {
     return handle((PyObject*) cast_existing_erased(src, &typeid(T)).first);
 }
 
-handle cast_existing_check_for_reclaim(
+inline handle cast_existing_check_for_reclaim(
         instance* inst, detail::type_info* instance_type, holder_erased existing_holder,
         bool is_bare_ptr, bool take_ownership) {
     handle h((PyObject *)inst);
