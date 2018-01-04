@@ -4,272 +4,279 @@ from pybind11_tests import smart_ptr as m
 from pybind11_tests import ConstructorStats
 
 
-def test_smart_ptr(capture):
-    # Object1
-    for i, o in enumerate([m.make_object_1(), m.make_object_2(), m.MyObject1(3)], start=1):
-        assert o.getRefCount() == 1
-        with capture:
-            m.print_object_1(o)
-            m.print_object_2(o)
-            m.print_object_3(o)
-            m.print_object_4(o)
-        assert capture == "MyObject1[{i}]\n".format(i=i) * 4
+# def test_smart_ptr(capture):
+#     # Object1
+#     for i, o in enumerate([m.make_object_1(), m.make_object_2(), m.MyObject1(3)], start=1):
+#         assert o.getRefCount() == 1
+#         with capture:
+#             m.print_object_1(o)
+#             m.print_object_2(o)
+#             m.print_object_3(o)
+#             m.print_object_4(o)
+#         assert capture == "MyObject1[{i}]\n".format(i=i) * 4
 
-    for i, o in enumerate([m.make_myobject1_1(), m.make_myobject1_2(), m.MyObject1(6), 7],
-                          start=4):
-        print(o)
-        with capture:
-            if not isinstance(o, int):
-                m.print_object_1(o)
-                m.print_object_2(o)
-                m.print_object_3(o)
-                m.print_object_4(o)
-            m.print_myobject1_1(o)
-            m.print_myobject1_2(o)
-            m.print_myobject1_3(o)
-            m.print_myobject1_4(o)
-        assert capture == "MyObject1[{i}]\n".format(i=i) * (4 if isinstance(o, int) else 8)
+#     for i, o in enumerate([m.make_myobject1_1(), m.make_myobject1_2(), m.MyObject1(6), 7],
+#                           start=4):
+#         print(o)
+#         with capture:
+#             if not isinstance(o, int):
+#                 m.print_object_1(o)
+#                 m.print_object_2(o)
+#                 m.print_object_3(o)
+#                 m.print_object_4(o)
+#             m.print_myobject1_1(o)
+#             m.print_myobject1_2(o)
+#             m.print_myobject1_3(o)
+#             m.print_myobject1_4(o)
+#         assert capture == "MyObject1[{i}]\n".format(i=i) * (4 if isinstance(o, int) else 8)
 
-    cstats = ConstructorStats.get(m.MyObject1)
-    assert cstats.alive() == 0
-    expected_values = ['MyObject1[{}]'.format(i) for i in range(1, 7)] + ['MyObject1[7]'] * 4
-    assert cstats.values() == expected_values
-    assert cstats.default_constructions == 0
-    assert cstats.copy_constructions == 0
-    # assert cstats.move_constructions >= 0 # Doesn't invoke any
-    assert cstats.copy_assignments == 0
-    assert cstats.move_assignments == 0
+#     cstats = ConstructorStats.get(m.MyObject1)
+#     assert cstats.alive() == 0
+#     expected_values = ['MyObject1[{}]'.format(i) for i in range(1, 7)] + ['MyObject1[7]'] * 4
+#     assert cstats.values() == expected_values
+#     assert cstats.default_constructions == 0
+#     assert cstats.copy_constructions == 0
+#     # assert cstats.move_constructions >= 0 # Doesn't invoke any
+#     assert cstats.copy_assignments == 0
+#     assert cstats.move_assignments == 0
 
-    # Object2
-    for i, o in zip([8, 6, 7], [m.MyObject2(8), m.make_myobject2_1(), m.make_myobject2_2()]):
-        print(o)
-        with capture:
-            m.print_myobject2_1(o)
-            m.print_myobject2_2(o)
-            m.print_myobject2_3(o)
-            m.print_myobject2_4(o)
-        assert capture == "MyObject2[{i}]\n".format(i=i) * 4
+#     # Object2
+#     for i, o in zip([8, 6, 7], [m.MyObject2(8), m.make_myobject2_1(), m.make_myobject2_2()]):
+#         print(o)
+#         with capture:
+#             m.print_myobject2_1(o)
+#             m.print_myobject2_2(o)
+#             m.print_myobject2_3(o)
+#             m.print_myobject2_4(o)
+#         assert capture == "MyObject2[{i}]\n".format(i=i) * 4
 
-    cstats = ConstructorStats.get(m.MyObject2)
-    assert cstats.alive() == 1
-    o = None
-    assert cstats.alive() == 0
-    assert cstats.values() == ['MyObject2[8]', 'MyObject2[6]', 'MyObject2[7]']
-    assert cstats.default_constructions == 0
-    assert cstats.copy_constructions == 0
-    # assert cstats.move_constructions >= 0 # Doesn't invoke any
-    assert cstats.copy_assignments == 0
-    assert cstats.move_assignments == 0
+#     cstats = ConstructorStats.get(m.MyObject2)
+#     assert cstats.alive() == 1
+#     o = None
+#     assert cstats.alive() == 0
+#     assert cstats.values() == ['MyObject2[8]', 'MyObject2[6]', 'MyObject2[7]']
+#     assert cstats.default_constructions == 0
+#     assert cstats.copy_constructions == 0
+#     # assert cstats.move_constructions >= 0 # Doesn't invoke any
+#     assert cstats.copy_assignments == 0
+#     assert cstats.move_assignments == 0
 
-    # Object3
-    for i, o in zip([9, 8, 9], [m.MyObject3(9), m.make_myobject3_1(), m.make_myobject3_2()]):
-        print(o)
-        with capture:
-            m.print_myobject3_1(o)
-            m.print_myobject3_2(o)
-            m.print_myobject3_3(o)
-            m.print_myobject3_4(o)
-        assert capture == "MyObject3[{i}]\n".format(i=i) * 4
+#     # Object3
+#     for i, o in zip([9, 8, 9], [m.MyObject3(9), m.make_myobject3_1(), m.make_myobject3_2()]):
+#         print(o)
+#         with capture:
+#             m.print_myobject3_1(o)
+#             m.print_myobject3_2(o)
+#             m.print_myobject3_3(o)
+#             m.print_myobject3_4(o)
+#         assert capture == "MyObject3[{i}]\n".format(i=i) * 4
 
-    cstats = ConstructorStats.get(m.MyObject3)
-    assert cstats.alive() == 1
-    o = None
-    assert cstats.alive() == 0
-    assert cstats.values() == ['MyObject3[9]', 'MyObject3[8]', 'MyObject3[9]']
-    assert cstats.default_constructions == 0
-    assert cstats.copy_constructions == 0
-    # assert cstats.move_constructions >= 0 # Doesn't invoke any
-    assert cstats.copy_assignments == 0
-    assert cstats.move_assignments == 0
+#     cstats = ConstructorStats.get(m.MyObject3)
+#     assert cstats.alive() == 1
+#     o = None
+#     assert cstats.alive() == 0
+#     assert cstats.values() == ['MyObject3[9]', 'MyObject3[8]', 'MyObject3[9]']
+#     assert cstats.default_constructions == 0
+#     assert cstats.copy_constructions == 0
+#     # assert cstats.move_constructions >= 0 # Doesn't invoke any
+#     assert cstats.copy_assignments == 0
+#     assert cstats.move_assignments == 0
 
-    # Object
-    cstats = ConstructorStats.get(m.Object)
-    assert cstats.alive() == 0
-    assert cstats.values() == []
-    assert cstats.default_constructions == 10
-    assert cstats.copy_constructions == 0
-    # assert cstats.move_constructions >= 0 # Doesn't invoke any
-    assert cstats.copy_assignments == 0
-    assert cstats.move_assignments == 0
+#     # Object
+#     cstats = ConstructorStats.get(m.Object)
+#     assert cstats.alive() == 0
+#     assert cstats.values() == []
+#     assert cstats.default_constructions == 10
+#     assert cstats.copy_constructions == 0
+#     # assert cstats.move_constructions >= 0 # Doesn't invoke any
+#     assert cstats.copy_assignments == 0
+#     assert cstats.move_assignments == 0
 
-    # ref<>
-    cstats = m.cstats_ref()
-    assert cstats.alive() == 0
-    assert cstats.values() == ['from pointer'] * 10
-    assert cstats.default_constructions == 30
-    assert cstats.copy_constructions == 12
-    # assert cstats.move_constructions >= 0 # Doesn't invoke any
-    assert cstats.copy_assignments == 30
-    assert cstats.move_assignments == 0
-
-
-def test_smart_ptr_refcounting():
-    assert m.test_object1_refcounting()
+#     # ref<>
+#     cstats = m.cstats_ref()
+#     assert cstats.alive() == 0
+#     assert cstats.values() == ['from pointer'] * 10
+#     assert cstats.default_constructions == 30
+#     assert cstats.copy_constructions == 12
+#     # assert cstats.move_constructions >= 0 # Doesn't invoke any
+#     assert cstats.copy_assignments == 30
+#     assert cstats.move_assignments == 0
 
 
-def test_unique_nodelete():
-    o = m.MyObject4(23)
-    assert o.value == 23
-    cstats = ConstructorStats.get(m.MyObject4)
-    assert cstats.alive() == 1
-    del o
-    assert cstats.alive() == 1  # Leak, but that's intentional
+# def test_smart_ptr_refcounting():
+#     assert m.test_object1_refcounting()
 
 
-def test_large_holder():
-    o = m.MyObject5(5)
-    assert o.value == 5
-    cstats = ConstructorStats.get(m.MyObject5)
-    assert cstats.alive() == 1
-    del o
-    assert cstats.alive() == 0
+# def test_unique_nodelete():
+#     o = m.MyObject4(23)
+#     assert o.value == 23
+#     cstats = ConstructorStats.get(m.MyObject4)
+#     assert cstats.alive() == 1
+#     del o
+#     assert cstats.alive() == 1  # Leak, but that's intentional
 
 
-def test_shared_ptr_and_references():
-    s = m.SharedPtrRef()
-    stats = ConstructorStats.get(m.A)
-    assert stats.alive() == 2
-
-    ref = s.ref  # init_holder_helper(holder_ptr=false, owned=false)
-    assert stats.alive() == 2
-    assert s.set_ref(ref)
-    with pytest.raises(RuntimeError) as excinfo:
-        assert s.set_holder(ref)
-    assert "Unable to cast from non-held to held instance" in str(excinfo.value)
-
-    copy = s.copy  # init_holder_helper(holder_ptr=false, owned=true)
-    assert stats.alive() == 3
-    assert s.set_ref(copy)
-    assert s.set_holder(copy)
-
-    holder_ref = s.holder_ref  # init_holder_helper(holder_ptr=true, owned=false)
-    assert stats.alive() == 3
-    assert s.set_ref(holder_ref)
-    assert s.set_holder(holder_ref)
-
-    holder_copy = s.holder_copy  # init_holder_helper(holder_ptr=true, owned=true)
-    assert stats.alive() == 3
-    assert s.set_ref(holder_copy)
-    assert s.set_holder(holder_copy)
-
-    del ref, copy, holder_ref, holder_copy, s
-    assert stats.alive() == 0
+# def test_large_holder():
+#     o = m.MyObject5(5)
+#     assert o.value == 5
+#     cstats = ConstructorStats.get(m.MyObject5)
+#     assert cstats.alive() == 1
+#     del o
+#     assert cstats.alive() == 0
 
 
-def test_shared_ptr_from_this_and_references():
-    s = m.SharedFromThisRef()
-    stats = ConstructorStats.get(m.B)
-    assert stats.alive() == 2
+# def test_shared_ptr_and_references():
+#     s = m.SharedPtrRef()
+#     stats = ConstructorStats.get(m.A)
+#     assert stats.alive() == 2
 
-    ref = s.ref  # init_holder_helper(holder_ptr=false, owned=false, bad_wp=false)
-    assert stats.alive() == 2
-    assert s.set_ref(ref)
-    assert s.set_holder(ref)  # std::enable_shared_from_this can create a holder from a reference
+#     ref = s.ref  # init_holder_helper(holder_ptr=false, owned=false)
+#     assert stats.alive() == 2
+#     assert s.set_ref(ref)
+#     with pytest.raises(RuntimeError) as excinfo:
+#         assert s.set_holder(ref)
+#     assert "Unable to cast from non-held to held instance" in str(excinfo.value)
 
-    bad_wp = s.bad_wp  # init_holder_helper(holder_ptr=false, owned=false, bad_wp=true)
-    assert stats.alive() == 2
-    assert s.set_ref(bad_wp)
-    with pytest.raises(RuntimeError) as excinfo:
-        assert s.set_holder(bad_wp)
-    assert "Unable to cast from non-held to held instance" in str(excinfo.value)
+#     copy = s.copy  # init_holder_helper(holder_ptr=false, owned=true)
+#     assert stats.alive() == 3
+#     assert s.set_ref(copy)
+#     assert s.set_holder(copy)
 
-    copy = s.copy  # init_holder_helper(holder_ptr=false, owned=true, bad_wp=false)
-    assert stats.alive() == 3
-    assert s.set_ref(copy)
-    assert s.set_holder(copy)
+#     holder_ref = s.holder_ref  # init_holder_helper(holder_ptr=true, owned=false)
+#     assert stats.alive() == 3
+#     assert s.set_ref(holder_ref)
+#     assert s.set_holder(holder_ref)
 
-    holder_ref = s.holder_ref  # init_holder_helper(holder_ptr=true, owned=false, bad_wp=false)
-    assert stats.alive() == 3
-    assert s.set_ref(holder_ref)
-    assert s.set_holder(holder_ref)
+#     holder_copy = s.holder_copy  # init_holder_helper(holder_ptr=true, owned=true)
+#     assert stats.alive() == 3
+#     assert s.set_ref(holder_copy)
+#     assert s.set_holder(holder_copy)
 
-    holder_copy = s.holder_copy  # init_holder_helper(holder_ptr=true, owned=true, bad_wp=false)
-    assert stats.alive() == 3
-    assert s.set_ref(holder_copy)
-    assert s.set_holder(holder_copy)
-
-    del ref, bad_wp, copy, holder_ref, holder_copy, s
-    assert stats.alive() == 0
-
-    z = m.SharedFromThisVirt.get()
-    y = m.SharedFromThisVirt.get()
-    assert y is z
+#     del ref, copy, holder_ref, holder_copy, s
+#     assert stats.alive() == 0
 
 
-def test_move_only_holder():
-    a = m.TypeWithMoveOnlyHolder.make()
-    stats = ConstructorStats.get(m.TypeWithMoveOnlyHolder)
-    assert stats.alive() == 1
-    del a
-    assert stats.alive() == 0
+# def test_shared_ptr_from_this_and_references():
+#     s = m.SharedFromThisRef()
+#     stats = ConstructorStats.get(m.B)
+#     assert stats.alive() == 2
+
+#     ref = s.ref  # init_holder_helper(holder_ptr=false, owned=false, bad_wp=false)
+#     assert stats.alive() == 2
+#     assert s.set_ref(ref)
+#     assert s.set_holder(ref)  # std::enable_shared_from_this can create a holder from a reference
+
+#     bad_wp = s.bad_wp  # init_holder_helper(holder_ptr=false, owned=false, bad_wp=true)
+#     assert stats.alive() == 2
+#     assert s.set_ref(bad_wp)
+#     with pytest.raises(RuntimeError) as excinfo:
+#         assert s.set_holder(bad_wp)
+#     assert "Unable to cast from non-held to held instance" in str(excinfo.value)
+
+#     copy = s.copy  # init_holder_helper(holder_ptr=false, owned=true, bad_wp=false)
+#     assert stats.alive() == 3
+#     assert s.set_ref(copy)
+#     assert s.set_holder(copy)
+
+#     holder_ref = s.holder_ref  # init_holder_helper(holder_ptr=true, owned=false, bad_wp=false)
+#     assert stats.alive() == 3
+#     assert s.set_ref(holder_ref)
+#     assert s.set_holder(holder_ref)
+
+#     holder_copy = s.holder_copy  # init_holder_helper(holder_ptr=true, owned=true, bad_wp=false)
+#     assert stats.alive() == 3
+#     assert s.set_ref(holder_copy)
+#     assert s.set_holder(holder_copy)
+
+#     del ref, bad_wp, copy, holder_ref, holder_copy, s
+#     assert stats.alive() == 0
+
+#     z = m.SharedFromThisVirt.get()
+#     y = m.SharedFromThisVirt.get()
+#     assert y is z
 
 
-def test_smart_ptr_from_default():
-    instance = m.HeldByDefaultHolder()
-    with pytest.raises(RuntimeError) as excinfo:
-        m.HeldByDefaultHolder.load_shared_ptr(instance)
-    assert "Unable to load a custom holder type from a default-holder instance" in str(excinfo)
+# def test_move_only_holder():
+#     a = m.TypeWithMoveOnlyHolder.make()
+#     stats = ConstructorStats.get(m.TypeWithMoveOnlyHolder)
+#     assert stats.alive() == 1
+#     del a
+#     assert stats.alive() == 0
 
 
-def test_shared_ptr_gc():
-    """#187: issue involving std::shared_ptr<> return value policy & garbage collection"""
-    el = m.ElementList()
-    for i in range(10):
-        el.add(m.ElementA(i))
-    pytest.gc_collect()
-    for i, v in enumerate(el.get()):
-        assert i == v.value()
+# def test_smart_ptr_from_default():
+#     instance = m.HeldByDefaultHolder()
+#     with pytest.raises(RuntimeError) as excinfo:
+#         m.HeldByDefaultHolder.load_shared_ptr(instance)
+#     assert "Unable to load a custom holder type from a default-holder instance" in str(excinfo)
 
 
-def test_unique_ptr_arg():
-    stats = ConstructorStats.get(m.UniquePtrHeld)
+# def test_shared_ptr_gc():
+#     """#187: issue involving std::shared_ptr<> return value policy & garbage collection"""
+#     el = m.ElementList()
+#     for i in range(10):
+#         el.add(m.ElementA(i))
+#     pytest.gc_collect()
+#     for i, v in enumerate(el.get()):
+#         assert i == v.value()
 
-    pass_through_list = [
-        m.unique_ptr_pass_through,
-        m.unique_ptr_pass_through_cast_from_py,
-        m.unique_ptr_pass_through_move_from_py,
-        m.unique_ptr_pass_through_move_to_py,
-        m.unique_ptr_pass_through_cast_to_py,
-    ]
-    for pass_through in pass_through_list:
-        obj = m.UniquePtrHeld(1)
-        obj_ref = m.unique_ptr_pass_through(obj)
-        assert stats.alive() == 1
-        assert obj.value() == 1
-        assert obj == obj_ref
-        del obj
-        del obj_ref
-        pytest.gc_collect()
-        assert stats.alive() == 0
 
-    obj = m.UniquePtrHeld(1)
-    m.unique_ptr_terminal(obj)
-    assert stats.alive() == 0
+# def test_unique_ptr_arg():
+#     stats = ConstructorStats.get(m.UniquePtrHeld)
 
-    m.unique_ptr_terminal(m.UniquePtrHeld(2))
-    assert stats.alive() == 0
+#     pass_through_list = [
+#         m.unique_ptr_pass_through,
+#         m.unique_ptr_pass_through_cast_from_py,
+#         m.unique_ptr_pass_through_move_from_py,
+#         m.unique_ptr_pass_through_move_to_py,
+#         m.unique_ptr_pass_through_cast_to_py,
+#     ]
+#     for pass_through in pass_through_list:
+#         obj = m.UniquePtrHeld(1)
+#         obj_ref = m.unique_ptr_pass_through(obj)
+#         assert stats.alive() == 1
+#         assert obj.value() == 1
+#         assert obj == obj_ref
+#         del obj
+#         del obj_ref
+#         pytest.gc_collect()
+#         assert stats.alive() == 0
+
+#     obj = m.UniquePtrHeld(1)
+#     m.unique_ptr_terminal(obj)
+#     assert stats.alive() == 0
+
+#     m.unique_ptr_terminal(m.UniquePtrHeld(2))
+#     assert stats.alive() == 0
+
+
+import gc
+pytest.gc_collect = gc.collect
 
 
 def test_unique_ptr_keep_alive():
     obj_stats = ConstructorStats.get(m.UniquePtrHeld)
-    c_plain_stats = ConstructorStats.get(m.ContainerPlain)
 
-    # Try with plain container.
-    obj = m.UniquePtrHeld(0)
-    c_plain = m.ContainerPlain(obj)
-    c_plain_wref = weakref.ref(c_plain)
-    assert obj_stats.alive() == 1
-    assert c_plain_stats.alive() == 1
-    del c_plain
-    pytest.gc_collect()
-    # Everything should have died.
-    assert c_plain_wref() is None
-    assert c_plain_stats.alive() == 0
-    assert obj_stats.alive() == 0
-    del obj
+    # # Try with plain container.
+    # c_plain_stats = ConstructorStats.get(m.ContainerPlain)
+    # obj = m.UniquePtrHeld(0)
+    # c_plain = m.ContainerPlain(obj)
+    # c_plain_wref = weakref.ref(c_plain)
+    # assert obj_stats.alive() == 1
+    # assert c_plain_stats.alive() == 1
+    # del c_plain
+    # pytest.gc_collect()
+    # # Everything should have died.
+    # assert c_plain_wref() is None
+    # assert c_plain_stats.alive() == 0
+    # assert obj_stats.alive() == 0
+    # del obj
 
     # Now try with keep-alive containers.
-    for i, keep_cls in enumerate([m.ContainerKeepAlive, m.ContainerExposeOwnership]):
+    # for i, keep_cls in enumerate([m.ContainerKeepAlive, m.ContainerExposeOwnership]):
+    keep_cls = m.ContainerExposeOwnership
+    i = 1
+    if True:
         c_keep_stats = ConstructorStats.get(keep_cls)
         obj = m.UniquePtrHeld(i + 1)
         print("create")
@@ -294,7 +301,8 @@ def test_unique_ptr_keep_alive():
         del obj
         pytest.gc_collect()
 
+test_unique_ptr_keep_alive()
 
-def test_unique_ptr_to_shared_ptr():
-    obj = m.shared_ptr_held_in_unique_ptr()
-    assert m.shared_ptr_held_func(obj)
+# def test_unique_ptr_to_shared_ptr():
+#     obj = m.shared_ptr_held_in_unique_ptr()
+#     assert m.shared_ptr_held_func(obj)
