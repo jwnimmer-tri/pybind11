@@ -64,17 +64,24 @@ py::object expose_ownership(
     const unique_ptr<NurseT>& nurse_ptr, const OwnerT* owner,
     py::object owner_py = {}) {
     if (nurse_ptr) {
+        py::print("Has value");
         py::handle nurse_py = py::detail::cast_existing(nurse_ptr.get());
         if (nurse_py) {
+            py::print("Has existing value");
             // Expose owner to Python, registering it if needed.
             // This assumes that the lifetime of the owner is appropriately managed!
             if (!owner_py) {
                 owner_py = py::cast(owner);
             }
+            py::print("Adding: ", nurse_py, owner_py);
             py::detail::add_patient(nurse_py.ptr(), owner_py.ptr());
             return owner_py;
         }
+        // TODO(eric.cousineau): This is NOT good if we want to always allow the nurse to keep the object alive.
+        // (e.g. if it's created within the container, and only a reference is passed).
+        // Could just delegate this to the user, have them use `keep_alive<0, 1>`.
     }
+    py::print("No ownership");
     // Return empty object.
     return py::object();
 }
