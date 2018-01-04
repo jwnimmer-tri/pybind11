@@ -383,12 +383,15 @@ TEST_SUBMODULE(smart_ptr, m) {
                 py::cast<std::unique_ptr<UniquePtrHeld>>(std::move(obj_py));
             return obj;
         });
-    m.def("unique_ptr_pass_through_move_from_py",
-        [](py::object obj_py) {
-            auto obj =
-                py::move<std::unique_ptr<UniquePtrHeld>>(static_cast<py::object&&>(obj_py)); //std::move(obj_py));
-            return obj;
-        });
+    static_assert(
+        py::detail::move_common<std::unique_ptr<UniquePtrHeld>>::value,
+        "This must always be true.");
+    // m.def("unique_ptr_pass_through_move_from_py",
+    //     [](py::object obj_py) {
+    //         auto obj =
+    //             py::move<std::unique_ptr<UniquePtrHeld>>(static_cast<py::object&&>(obj_py)); //std::move(obj_py));
+    //         return obj;
+    //     });
     // m.def("unique_ptr_pass_through_cast_to_py",
     //     [](std::unique_ptr<UniquePtrHeld> obj) {
     //         py::object obj_py = py::cast(std::move(obj));
