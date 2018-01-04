@@ -32,6 +32,11 @@
 #endif
 
 NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+
+template <return_value_policy policy = return_value_policy::automatic_reference, typename... Args>
+void print(Args &&...args);
+// inline void print_debug(const std::string& out);
+
 NAMESPACE_BEGIN(detail)
 
 /// A life support system for temporary objects created by `type_caster::load()`.
@@ -555,6 +560,7 @@ inline LoadType determine_load_type(handle src, const type_info* typeinfo,
 
 inline void clear_patients(PyObject *self);
 
+
 class type_caster_generic {
 public:
     PYBIND11_NOINLINE type_caster_generic(const std::type_info &type_info)
@@ -580,7 +586,6 @@ public:
             return none().release();
 
         const bool take_ownership = policy == return_value_policy::automatic || policy == return_value_policy::take_ownership;
-        bool do_clear_patients = false;
         // We only come across `!existing_holder` if we are coming from `cast` and not `cast_holder`.
         const bool is_bare_ptr = !existing_holder.ptr() && existing_holder.type_id() == HolderTypeId::Unknown;
 
@@ -589,6 +594,7 @@ public:
             for (auto instance_type : detail::all_type_info(Py_TYPE(it_i->second))) {
                 if (instance_type && same_type(*instance_type->cpptype, *tinfo->cpptype)) {
                     instance* const inst = it_i->second;
+                    handle h((PyObject *)inst);
 
                     bool try_to_reclaim = false;
                     if (!is_bare_ptr) {
@@ -597,7 +603,8 @@ public:
                                 try_to_reclaim = take_ownership;
                                 if (take_ownership) {
                                     // If pybind is taking ownership, then we can release all patients that have this as a nurse.
-                                    do_clear_patients = true;
+                                    print("GONNA CLEAR PATIENTS for", h);
+                                    clear_patients(h.ptr());
                                 }
                                 break;
                             }
@@ -639,7 +646,7 @@ public:
                         // TODO(eric.cousineau): Should really check that ownership is consistent.
                         // e.g. if we say to take ownership of a pointer that is passed, does not have a holder...
                         // In the end, pybind11 would let ownership slip, and leak memory, possibly violating RAII (if someone is using that...)
-                        return handle((PyObject *) it_i->second).inc_ref();
+                        return h.inc_ref();
                     }
                 }
             }
@@ -687,7 +694,6 @@ public:
                 valueptr = src;
                 wrapper->owned = false;
                 keep_alive_impl(inst, parent);
-                assert(!do_clear_patients);
                 break;
 
             default:
@@ -697,10 +703,6 @@ public:
         // TODO(eric.cousineau): Propagate `holder_erased` through this chain.
         tinfo->init_instance(wrapper, existing_holder);
         handle h = inst.release();
-        if (do_clear_patients) {
-            // Clear patients if needed.
-            clear_patients(h.ptr());
-        }
         return h;
     }
 

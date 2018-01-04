@@ -266,6 +266,7 @@ def test_unique_ptr_keep_alive():
     c_keep_wref = weakref.ref(c_keep)
     assert obj_stats.alive() == 1
     assert c_keep_stats.alive() == 1
+    print("DELETE")
     del c_keep
     pytest.gc_collect()
     # Everything should have stayed alive.
@@ -273,6 +274,7 @@ def test_unique_ptr_keep_alive():
     assert c_keep_stats.alive() == 1
     assert obj_stats.alive() == 1
     # Now release the object. This should have released the container as a patient.
+    print("RELEASE")
     c_keep_wref().release()
     pytest.gc_collect()
     assert obj_stats.alive() == 1
