@@ -32,13 +32,6 @@ private:
 
 NAMESPACE_BEGIN(initimpl)
 
-using NursesAfterInitStack = std::vector<std::vector<PyObject*>>;  // Used to handle life support during creation of patient.
-
-inline NursesAfterInitStack& nurses_after_init() {
-    static NursesAfterInitStack &data = get_or_create_shared_data<NursesAfterInitStack>("nurses_after_init");
-    return data;
-}
-
 // CAVEAT: There will not be good parallel behavior between C++-constructed and pybind-constructed objects...
 // The only way to do this is to track what instances are created for an object, then
 // do the transfer. It cannot be done super cleanly.
@@ -50,13 +43,8 @@ inline NursesAfterInitStack& nurses_after_init() {
 // See `loader_life_support` for model.
 struct instance_creation {
     inline static instance* current() {
-        static std::vector<PyObject*> dummy_data;  // When called by pure C++.
-        auto& data = nurses_after_init();
-        if (data.empty()) {
-            return dummy_data;
-        } else {
-            return data.back();
-        }
+        assert(get_stack().size() > 0);
+        return get_stack().back();
     }
     inline instance_creation(instance* inst) : inst_(inst) {
         get_stack().push_back(inst);
@@ -64,7 +52,6 @@ struct instance_creation {
     inline ~instance_creation() {
         auto& stack = get_stack();
         assert(stack.size() > 0 && stack.back() == inst_);
-        auto current = std::move(stack.back());
         stack.pop_back();
         // Same heuristic from `cast`.
         if (stack.capacity() > 16 && stack.size() != 0 && stack.capacity() / stack.size() > 2) {
@@ -73,6 +60,11 @@ struct instance_creation {
     }
 private:
     instance* inst_;
+
+    inline static std::vector<instance*>& get_stack() {
+        static auto &data = get_or_create_shared_data<std::vector<instance*>>("instance_creation_stack");
+        return data;
+    }
 };
 
 inline void no_nullptr(void *ptr) {
@@ -372,20 +364,9 @@ struct pickle_factory<Get, Set, RetState(Self), NewInstance(ArgState)> {
 
 NAMESPACE_END(initimpl)
 
-
-// If a container `patient` is being constructed, it cannot cast itself to a Python object
-// to be used with `add_patient` (if it does, it will just generate a 'junk'
-// non-owned Python instance that refers to the same memory, but won't help
-// the actual keep-alive behavior).
-inline void add_nurse_after_init(std::vector<PyObject*> nurses, PyObject *patient) {
-    (void)patient;
-    auto& current = current_nurses_after_init();
-    current.insert(current.back(), nurses.begin(), nurses.end());
+inline handle get_current_init_instance() {
+    return {(PyObject*)initimpl::instance_creation::current()};
 }
-
-//inline handle get_current_init_instance() {
-//    return {(PyObject*)initimpl::instance_creation::current()};
-//}
 
 NAMESPACE_END(detail)
 NAMESPACE_END(pybind11)
