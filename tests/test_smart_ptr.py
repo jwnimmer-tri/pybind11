@@ -309,14 +309,13 @@ def test_unique_ptr_keep_alive():
     # Releasing the object / destorying the container should destroy the container.
     obj = m.UniquePtrHeld(2)
     c_expose = m.ContainerExposeOwnership(obj)
-    # Just calling this will trigger `keep_alive`.
-    c_expose.get()
-    # Now release the object. This should have released the container as a patient.
+    # Calling this should trigger `keep_alive`.
+    assert c_expose.get() is obj
     c_expose_wref = weakref.ref(c_expose)
     del c_expose
     pytest.gc_collect()
     assert obj_stats.alive() == 1
-    assert c_expose_stats.alive() == 0    
+    assert c_expose_stats.alive() == 1
     # We know that deleting `obj` will release the container.
     # Another test is to release `obj` from `c_expose_stats`, but *directly* to another
     # container in C++.
