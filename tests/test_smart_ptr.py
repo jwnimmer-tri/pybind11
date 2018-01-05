@@ -286,21 +286,20 @@ def test_unique_ptr_keep_alive():
     obj = m.UniquePtrHeld(2)
     c_expose = m.ContainerExposeOwnership(obj)
     assert obj_stats.alive() == 1
-    assert c_keep_stats.alive() == 1
+    assert c_expose_stats.alive() == 1
     del c_expose
     pytest.gc_collect()
     # The container should have been destroyed, but released the object.
-    assert c_keep_stats.alive() == 0
+    assert c_expose_stats.alive() == 0
     assert obj_stats.alive() == 1
     del obj
     pytest.gc_collect()
-    assert c_keep_stats.alive() == 0
+    assert c_expose_stats.alive() == 0
     assert obj_stats.alive() == 0
 
     # # Now recreate, and get the object. `keep_alive` from `.get()` will keep the container alive.
     # # Releasing the object / destorying the container should destroy the container.
     # c_expose = keep_cls(obj)
-    # assert
     # # Now release the object. This should have released the container as a patient.
     # c_keep_wref().release()
     # pytest.gc_collect()

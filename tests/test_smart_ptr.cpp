@@ -58,35 +58,50 @@ PYBIND11_DECLARE_HOLDER_TYPE(T, custom_unique_ptr<T>);
 
 using std::unique_ptr;
 
-// Returns Python handle to owner.
-template <typename NurseT, typename OwnerT>
-py::object expose_ownership(
-    const unique_ptr<NurseT>& nurse_ptr, const OwnerT* owner, py::object owner_py = {}) {
-    if (nurse_ptr) {
-        py::handle nurse_py = py::detail::cast_existing(nurse_ptr.get());
-        if (nurse_py) {
-            // Expose owner to Python, registering it if needed.
-            // This assumes that the lifetime of the owner is appropriately managed!
-            if (!owner_py) {
-                // TODO: Is there some way to get a persistent py::object when casting
-                // at construction?
-                // Presently, there's a hack (see `py::detail::initimpl::instance_creation`)
-                // which will detect a duplicate instance record, and transfer nurses.
-                owner_py = py::cast(owner);
-            }
-            py::detail::add_patient(nurse_py.ptr(), owner_py.ptr());
-            return owner_py;
-        }
-    }
-    // Return empty object.
-    return py::object();
-}
+// // Returns Python handle to owner.
+// template <typename NurseT, typename OwnerT>
+// py::object expose_ownership(
+//     const unique_ptr<NurseT>& nurse_ptr, const OwnerT* owner, py::object owner_py = {}) {
+//     if (nurse_ptr) {
+//         py::handle nurse_py = py::detail::cast_existing(nurse_ptr.get());
+//         if (nurse_py) {
+//             // Expose owner to Python, registering it if needed.
+//             // This assumes that the lifetime of the owner is appropriately managed!
+//             if (!owner_py) {
+//                 // TODO: Is there some way to get a persistent py::object when casting
+//                 // at construction?
+//                 // Presently, there's a hack (see `py::detail::initimpl::instance_creation`)
+//                 // which will detect a duplicate instance record, and transfer nurses.
+//                 owner_py = py::cast(owner);
+//             }
+//             py::detail::add_patient(nurse_py.ptr(), owner_py.ptr());
+//             return owner_py;
+//         }
+//     }
+//     // Return empty object.
+//     return py::object();
+// }
 
 template <typename NurseT>
-void release_ownership(unique_ptr<NurseT> nurse_ptr) {
+void end_ownership(unique_ptr<NurseT> nurse_ptr) {
     if (nurse_ptr && py::detail::cast_existing(nurse_ptr.get())) {
         // Release object to be managed by pybind.
         py::move(std::move(nurse_ptr));
+    }
+}
+
+template <typename NurseT, typename OwnerT>
+void release_ownership(const unique_ptr<NurseT>& nurse_ptr, const OwnerT* owner) {
+    // Attempt to get the existing owner.
+    // If it and the nurse exists, ensure that this nurse no longer takes care of this owner.
+    py::handle owner_py = py::detail::cast_existing(owner);
+    if (!owner_py.is_none()) {
+        py::handle nurse_py = py::detail::cast_existing(nurse_ptr.get());
+        if (!nurse_py.is_none()) {
+            if (py::detail::has_patient(nurse_py.ptr(), owner_py.ptr())) {
+                py::detail::remove_patient(nurse_py.ptr(), owner_py.ptr());
+            }
+        }
     }
 }
 
@@ -104,23 +119,22 @@ public:
     using Ptr = std::unique_ptr<T>;
     Container(Ptr ptr)
         : ptr_(std::move(ptr)) {
-        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
-            expose_ownership(ptr_, this);
-        }
         print_created(this);
     }
     ~Container() {
         if (keep_alive_type == KeepAliveType::ExposeOwnership) {
-            release_ownership(std::move(ptr_));
+            end_ownership(std::move(ptr_));
         }
         print_destroyed(this);
     }
     T* get() const { return ptr_.get(); }
-    Ptr release() { return std::move(ptr_); }
+    Ptr release() {
+        release_ownership(ptr_, this);
+        return std::move(ptr_);
+    }
     void reset(Ptr ptr) {
-        release_ownership(std::move(ptr_));
+        end_ownership(std::move(ptr_));
         ptr_ = std::move(ptr);
-        expose_ownership(ptr_, this);
     }
 
     static void def(py::module &m, const std::string& name) {

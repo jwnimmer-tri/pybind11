@@ -294,27 +294,40 @@ inline LifeSupportMap& get_nurses() {
     return out;
 }
 
-inline void add_patient(PyObject *nurse, PyObject *patient) {
-    auto &internals = get_internals();
+inline bool has_patient(PyObject *nurse, PyObject *patient) {
     auto instance = reinterpret_cast<detail::instance *>(nurse);
-    // Check if the patient has already been added.
-    auto& patients_cur = internals.patients[nurse];
+    auto& patients_cur = get_internals().patients[nurse];
     if (instance->has_patients) {
         if (std::find(patients_cur.begin(), patients_cur.end(), patient) !=
                 patients_cur.end()) {
-            // No need to add more cruft.
-            return;
+            return true;
         }
+    }
+    return false;
+}
+
+inline void add_patient(PyObject *nurse, PyObject *patient) {
+    auto instance = reinterpret_cast<detail::instance *>(nurse);
+    // Check if the patient has already been added.
+    if (has_patient(nurse, patient)) {
+        // No need to add more cruft.
+        return;
     }
     instance->has_patients = true;
     Py_INCREF(patient);
-    patients_cur.push_back(patient);
+    get_internals().patients[nurse].push_back(patient);
     get_nurses()[patient].push_back(nurse);
 }
 
 template <typename T>
 inline void clear_value(std::vector<T>& vec, const T& v) {
     vec.erase(std::find(vec.begin(), vec.end(), v));
+}
+
+inline void remove_patient(PyObject *nurse, PyObject *patient) {
+    clear_value(get_internals().patients[nurse], patient);
+    clear_value(get_nurses()[patient], nurse);
+    Py_CLEAR(patient);
 }
 
 inline void clear_patients(PyObject *self) {
@@ -330,24 +343,17 @@ inline void clear_patients(PyObject *self) {
     auto patients = std::move(pos->second);
     internals.patients.erase(pos);
     instance->has_patients = false;
-    auto& nurses = get_nurses();
-    for (PyObject *&patient : patients) {
-        clear_value(nurses[patient], self);
-        Py_CLEAR(patient);
+    for (PyObject *patient : patients) {
+        remove_patient(self, patient);
     }
 }
 
 inline void transfer_nurses_for_patient(PyObject *from, PyObject* to) {
-    auto &internals = get_internals();
     // Copy, same as above.
     auto nurses_from = std::move(get_nurses()[from]);
     for (auto* nurse : nurses_from) {
+        remove_patient(nurse, from);
         add_patient(nurse, to);
-        // Remove patient.
-        // TODO: Use `Py_CLEAR`?
-        // Will this do anything in PyPy?
-        clear_value(internals.patients[nurse], from);
-        Py_DECREF(from);
     }
 }
 
