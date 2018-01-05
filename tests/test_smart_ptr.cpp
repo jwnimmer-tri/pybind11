@@ -129,12 +129,20 @@ public:
     }
     T* get() const { return ptr_.get(); }
     Ptr release() {
-        release_ownership(ptr_, this);
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            release_ownership(ptr_, this);
+        }
         return std::move(ptr_);
     }
     void reset(Ptr ptr) {
-        end_ownership(std::move(ptr_));
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            end_ownership(std::move(ptr_));
+        }
         ptr_ = std::move(ptr);
+    }
+    void steal_from(Container* other) {
+        assert(other != nullptr);
+        reset(other->release());
     }
 
     static void def(py::module &m, const std::string& name) {
@@ -146,9 +154,8 @@ public:
         }
         cls.def("get", &Container::get, py::return_value_policy::reference_internal);
         cls.def("release", &Container::release);
-        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
-            cls.def("reset", &Container::reset);
-        }
+        cls.def("reset", &Container::reset);
+        cls.def("steal_from", &Container::steal_from);
     }
 private:
     Ptr ptr_;

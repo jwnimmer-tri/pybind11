@@ -251,9 +251,11 @@ def test_unique_ptr_arg():
 
 def test_unique_ptr_keep_alive():
     obj_stats = ConstructorStats.get(m.UniquePtrHeld)
+    c_plain_stats = ConstructorStats.get(m.ContainerPlain)
+    c_keep_stats = ConstructorStats.get(m.ContainerKeepAlive)
+    c_expose_stats = ConstructorStats.get(m.ContainerExposeOwnership)
 
     # Try with plain container.
-    c_plain_stats = ConstructorStats.get(m.ContainerPlain)
     obj = m.UniquePtrHeld(0)
     c_plain = m.ContainerPlain(obj)
     assert obj_stats.alive() == 1
@@ -266,7 +268,6 @@ def test_unique_ptr_keep_alive():
     del obj
 
     # Primitive, but highly non-conservative.
-    c_keep_stats = ConstructorStats.get(m.ContainerKeepAlive)
     obj = m.UniquePtrHeld(1)
     c_keep = m.ContainerKeepAlive(obj)
     assert obj_stats.alive() == 1
@@ -282,7 +283,6 @@ def test_unique_ptr_keep_alive():
     assert obj_stats.alive() == 0
 
     # Much more conservative.
-    c_expose_stats = ConstructorStats.get(m.ContainerExposeOwnership)
     obj = m.UniquePtrHeld(2)
     c_expose = m.ContainerExposeOwnership(obj)
     assert obj_stats.alive() == 1
@@ -297,65 +297,50 @@ def test_unique_ptr_keep_alive():
     assert c_expose_stats.alive() == 0
     assert obj_stats.alive() == 0
 
-    # # Now recreate, and get the object. `keep_alive` from `.get()` will keep the container alive.
-    # # Releasing the object / destorying the container should destroy the container.
-    # c_expose = keep_cls(obj)
-    # # Now release the object. This should have released the container as a patient.
-    # c_keep_wref().release()
-    # pytest.gc_collect()
-    # assert obj_stats.alive() == 1
-    # assert c_keep_stats.alive() == 0
-    # del obj
-    # pytest.gc_collect()
+    # Now recreate, and get the object. `keep_alive` from `.get()` will keep the container alive.
+    # Releasing the object / destorying the container should destroy the container.
+    obj = m.UniquePtrHeld(2)
+    c_expose = m.ContainerExposeOwnership(obj)
+    # Just calling this will trigger `keep_alive`.
+    c_expose.get()
+    # Now release the object. This should have released the container as a patient.
+    c_expose_wref = weakref.ref(c_expose)
+    del c_expose
+    pytest.gc_collect()
+    assert obj_stats.alive() == 1
+    assert c_expose_stats.alive() == 0    
+    # We know that deleting `obj` will release the container.
+    # Another test is to release `obj` from `c_expose_stats`, but *directly* to another
+    # container in C++.
+    c_expose_other = m.ContainerExposeOwnership(None)  # (also test None)
+    assert c_expose_stats.alive() == 2
+    c_expose_other.steal_from(c_expose_wref())
+    pytest.gc_collect()
+    assert obj_stats.alive() == 1
+    assert c_expose_stats.alive() == 1
+    # Now if we delete the container, there's no keep alive, so the container should be dead.
+    del c_expose_other
+    pytest.gc_collect()
+    assert obj_stats.alive() == 1
+    assert c_expose_stats.alive() == 0
+    del obj
+    pytest.gc_collect()
 
-    # # Test with swapping out different objects with exposed ownership.
-    # keep_cls = m.ContainerExposeOwnership
-    # c_keep_stats = ConstructorStats.get(keep_cls)
-    # a = m.UniquePtrHeld(10)
-    # b = m.UniquePtrHeld(20)
-    # assert obj_stats.alive() == 2
-    # c_keep = keep_cls(a)
-    # c_keep_wref = weakref.ref(c_keep)
-    # del c_keep
-    # pytest.gc_collect()
-    # assert c_keep_stats.alive() == 1
-    # assert obj_stats.alive() == 2
-    # assert c_keep_wref().get().value() == 10
-    # # Now swap with `b`, and show that lifetime is only connected to `b`.
-    # # This should release `a` back to Python implicitly, even though
-    # # the lifetime appears terminal.
-    # c_keep_wref().reset(b)
-    # assert c_keep_wref().get().value() == 20
-    # pytest.gc_collect()
-    # assert c_keep_stats.alive() == 1
-    # assert obj_stats.alive() == 2
-    # # Now delete b, without releasing.
-    # # This should delete the container.
-    # del b
-    # pytest.gc_collect()
-    # assert c_keep_stats.alive() == 0
-    # assert obj_stats.alive() == 1
-    # assert a.value() == 10
-    # del a
-    # pytest.gc_collect()
-    # assert obj_stats.alive() == 0
-
-    # # One more time.
-    # obj = m.UniquePtrHeld(100)
-    # # Show transfer with indirection.
-    # c_keep = m.create_container_expose_ownership(obj)
-    # c_keep_wref = weakref.ref(c_keep)
-    # assert obj_stats.alive() == 1
-    # assert c_keep_stats.alive() == 1
-    # del c_keep
-    # pytest.gc_collect()
-    # assert c_keep_wref().get().value() == 100
-    # assert obj_stats.alive() == 1
-    # assert c_keep_stats.alive() == 1
-    # del obj
-    # pytest.gc_collect()
-    # assert obj_stats.alive() == 0
-    # assert c_keep_stats.alive() == 0
+    # One more time, with indirection introduced from C++.
+    obj = m.UniquePtrHeld(100)
+    c_keep = m.create_container_expose_ownership(obj)
+    c_keep_wref = weakref.ref(c_keep)
+    assert obj_stats.alive() == 1
+    assert c_keep_stats.alive() == 1
+    del c_keep
+    pytest.gc_collect()
+    assert c_keep_wref().get().value() == 100
+    assert obj_stats.alive() == 1
+    assert c_keep_stats.alive() == 1
+    del obj
+    pytest.gc_collect()
+    assert obj_stats.alive() == 0
+    assert c_keep_stats.alive() == 0
 
 def test_unique_ptr_to_shared_ptr():
     obj = m.shared_ptr_held_in_unique_ptr()
