@@ -130,7 +130,7 @@ public:
         } else {
             cls.def(py::init<Ptr>());
         }
-        cls.def("get", &Container::get);
+        cls.def("get", &Container::get, py::return_value_policy::reference_internal);
         cls.def("release", &Container::release);
         if (keep_alive_type == KeepAliveType::ExposeOwnership) {
             cls.def("reset", &Container::reset);
@@ -434,8 +434,19 @@ TEST_SUBMODULE(smart_ptr, m) {
         m, "ContainerPlain");
     Container<UniquePtrHeld, KeepAliveType::KeepAlive>::def(
         m, "ContainerKeepAlive");
-    Container<UniquePtrHeld, KeepAliveType::ExposeOwnership>::def(
+    using ContainerExposeOwnership = Container<UniquePtrHeld, KeepAliveType::ExposeOwnership>;
+    ContainerExposeOwnership::def(
         m, "ContainerExposeOwnership");
+
+    // See what happens when a container is created and destroyed in C++, and
+    // another is returned.
+    m.def("create_container_expose_ownership",
+        [](std::unique_ptr<UniquePtrHeld> obj) {
+            ContainerExposeOwnership tmp(std::move(obj));
+            if (tmp.get()->value() != 100)
+                throw std::runtime_error("Bad value");
+            return std::make_unique<ContainerExposeOwnership>(tmp.release());
+        });
 
     // Ensure class is non-empty, so it's easier to detect double-free
     // corruption. (If empty, this may be harder to see easily.)

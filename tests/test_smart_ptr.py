@@ -322,6 +322,22 @@ def test_unique_ptr_keep_alive():
     pytest.gc_collect()
     assert obj_stats.alive() == 0
 
+    # One more time.
+    obj = m.UniquePtrHeld(100)
+    c_keep = m.create_container_expose_ownership(obj)
+    c_keep_wref = weakref.ref(c_keep)
+    assert obj_stats.alive() == 1
+    assert c_keep_stats.alive() == 1
+    del c_keep
+    pytest.gc_collect()
+    assert c_keep_wref().get().value() == 500
+    assert obj_stats.alive() == 1
+    assert c_keep_stats.alive() == 1
+    del obj
+    pytest.gc_collect()
+    assert obj_stats.alive() == 0
+    assert c_keep_stats.alive() == 0
+
 def test_unique_ptr_to_shared_ptr():
     obj = m.shared_ptr_held_in_unique_ptr()
     assert m.shared_ptr_held_func(obj)

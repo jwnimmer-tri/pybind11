@@ -297,9 +297,18 @@ inline LifeSupportMap& get_nurses() {
 inline void add_patient(PyObject *nurse, PyObject *patient) {
     auto &internals = get_internals();
     auto instance = reinterpret_cast<detail::instance *>(nurse);
+    // Check if the patient has already been added.
+    auto& patients_cur = internals.patients[nurse];
+    if (instance->has_patients) {
+        if (std::find(patients_cur.begin(), patients_cur.end(), patient) !=
+                patients_cur.end()) {
+            // No need to add more cruft.
+            return;
+        }
+    }
     instance->has_patients = true;
     Py_INCREF(patient);
-    internals.patients[nurse].push_back(patient);
+    patients_cur.push_back(patient);
     get_nurses()[patient].push_back(nurse);
 }
 
