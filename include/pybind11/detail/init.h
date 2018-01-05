@@ -40,6 +40,7 @@ NAMESPACE_BEGIN(initimpl)
 // This way, we can access a non-constructed instance / PyObject, before the
 // constructor has returned.
 // This should be placed wherever `.def("__init__")` is called (or where pickling occurs).
+// WARNING: Only intended to work for single inheritance (if even that).
 struct instance_creation {
     inline instance_creation(value_and_holder& v_h) : v_h_(v_h) {}
     inline ~instance_creation() {

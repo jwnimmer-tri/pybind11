@@ -290,6 +290,38 @@ def test_unique_ptr_keep_alive():
         del obj
         pytest.gc_collect()
 
+    # Test with swapping out different objects with exposed ownership.
+    keep_cls = m.ContainerExposeOwnership
+    c_keep_stats = ConstructorStats.get(keep_cls)
+    a = m.UniquePtrHeld(10)
+    b = m.UniquePtrHeld(20)
+    assert obj_stats.alive() == 2
+    c_keep = keep_cls(a)
+    c_keep_wref = weakref.ref(c_keep)
+    del c_keep
+    pytest.gc_collect()
+    assert c_keep_stats.alive() == 1
+    assert obj_stats.alive() == 2
+    assert c_keep_wref().get().value() == 10
+    # Now swap with `b`, and show that lifetime is only connected to `b`.
+    # This should release `a` back to Python implicitly, even though
+    # the lifetime appears terminal.
+    c_keep_wref().reset(b)
+    assert c_keep_wref().get().value() == 20
+    pytest.gc_collect()
+    assert c_keep_stats.alive() == 1
+    assert obj_stats.alive() == 2
+    # Now delete b, without releasing.
+    # This should delete the container.
+    del b
+    pytest.gc_collect()
+    assert c_keep_stats.alive() == 0
+    assert obj_stats.alive() == 1
+    assert a.value() == 10
+    del a
+    pytest.gc_collect()
+    assert obj_stats.alive() == 0
+
 def test_unique_ptr_to_shared_ptr():
     obj = m.shared_ptr_held_in_unique_ptr()
     assert m.shared_ptr_held_func(obj)

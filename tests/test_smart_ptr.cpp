@@ -117,6 +117,11 @@ public:
     }
     T* get() const { return ptr_.get(); }
     Ptr release() { return std::move(ptr_); }
+    void reset(Ptr ptr) {
+        release_ownership(std::move(ptr_));
+        ptr_ = std::move(ptr);
+        expose_ownership(ptr_, this);
+    }
 
     static void def(py::module &m, const std::string& name) {
         py::class_<Container> cls(m, name.c_str());
@@ -127,6 +132,9 @@ public:
         }
         cls.def("get", &Container::get);
         cls.def("release", &Container::release);
+        if (keep_alive_type == KeepAliveType::ExposeOwnership) {
+            cls.def("reset", &Container::reset);
+        }
     }
 private:
     Ptr ptr_;
