@@ -324,10 +324,14 @@ inline void clear_value(std::vector<T>& vec, const T& v) {
     vec.erase(std::find(vec.begin(), vec.end(), v));
 }
 
-inline void remove_patient(PyObject *nurse, PyObject *patient) {
-    clear_value(get_internals().patients[nurse], patient);
+inline void do_remove_patient(PyObject *nurse, PyObject *patient) {
     clear_value(get_nurses()[patient], nurse);
     Py_CLEAR(patient);
+}
+
+inline void remove_patient(PyObject *nurse, PyObject *patient) {
+    clear_value(get_internals().patients[nurse], patient);
+    do_remove_patient(nurse, patient);
 }
 
 inline void clear_patients(PyObject *self) {
@@ -344,7 +348,7 @@ inline void clear_patients(PyObject *self) {
     internals.patients.erase(pos);
     instance->has_patients = false;
     for (PyObject *patient : patients) {
-        remove_patient(self, patient);
+        do_remove_patient(self, patient);
     }
 }
 
