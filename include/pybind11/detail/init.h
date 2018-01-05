@@ -46,13 +46,17 @@ struct instance_creation {
         // Check for duplicate instances: instances that have the same value as the current one, but is not the same instance.
         void* ptr = v_h_.value_ptr();
         instance* inst = v_h_.inst;
-        auto it_instances = internals().registered_instances.equal_range(ptr);
+        auto& reg = get_internals().registered_instances;
+        auto it_instances = reg.equal_range(ptr);
         for (auto it_i = it_instances.first; it_i != it_instances.second; ++it_i) {
             if (it_i->second != inst) {
                 instance* dup = it_i->second;
                 assert(!dup->owned);
                 // Transition life support from this object to here.
                 transfer_nurses_for_patient((PyObject*)dup, (PyObject*)inst);
+                // Only do this once, as the ranges may have shifted if the extra
+                // instance was destroyed.
+                break;
             }
         }
     }
