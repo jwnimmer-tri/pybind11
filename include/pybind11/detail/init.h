@@ -30,6 +30,10 @@ private:
     value_and_holder *value = nullptr;
 };
 
+// TODO(eric.cousineau): Add mechanism to stack the instances when they're being
+// constructed. This way, we can access a non-constructed instance / PyObject,
+// before the constructor has returned.
+
 NAMESPACE_BEGIN(initimpl)
 
 inline void no_nullptr(void *ptr) {
