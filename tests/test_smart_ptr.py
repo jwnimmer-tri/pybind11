@@ -270,6 +270,7 @@ def test_unique_ptr_keep_alive():
     # Primitive, but highly non-conservative.
     obj = m.UniquePtrHeld(1)
     c_keep = m.ContainerKeepAlive(obj)
+    c_keep_wref = weakref.ref(c_keep)
     assert obj_stats.alive() == 1
     assert c_keep_stats.alive() == 1
     del c_keep
@@ -277,10 +278,14 @@ def test_unique_ptr_keep_alive():
     # The container should have been kept alive by the object.
     assert c_keep_stats.alive() == 1
     assert obj_stats.alive() == 1
-    del obj
+    # We know deleting the object would destroy it.
+    # Release it, to show that the life support is released.
+    c_keep_wref().release()
     pytest.gc_collect()
     assert c_keep_stats.alive() == 0
-    assert obj_stats.alive() == 0
+    assert obj_stats.alive() == 1
+    del obj
+    pytest.gc_collect()
 
     # Much more conservative.
     obj = m.UniquePtrHeld(2)
