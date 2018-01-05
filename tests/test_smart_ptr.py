@@ -324,13 +324,14 @@ def test_unique_ptr_keep_alive():
 
     # One more time.
     obj = m.UniquePtrHeld(100)
+    # Show transfer with indirection.
     c_keep = m.create_container_expose_ownership(obj)
     c_keep_wref = weakref.ref(c_keep)
     assert obj_stats.alive() == 1
     assert c_keep_stats.alive() == 1
     del c_keep
     pytest.gc_collect()
-    assert c_keep_wref().get().value() == 500
+    assert c_keep_wref().get().value() == 100
     assert obj_stats.alive() == 1
     assert c_keep_stats.alive() == 1
     del obj
