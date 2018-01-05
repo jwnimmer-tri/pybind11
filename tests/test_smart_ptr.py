@@ -249,6 +249,9 @@ def test_unique_ptr_arg():
     m.unique_ptr_terminal(m.UniquePtrHeld(2))
     assert stats.alive() == 0
 
+    assert m.unique_ptr_pass_through(None) is None
+    m.unique_ptr_terminal(None)
+
 def test_unique_ptr_keep_alive():
     obj_stats = ConstructorStats.get(m.UniquePtrHeld)
     c_plain_stats = ConstructorStats.get(m.ContainerPlain)
