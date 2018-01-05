@@ -342,6 +342,12 @@ inline void transfer_nurses_for_patient(PyObject *from, PyObject* to) {
     }
 }
 
+inline void merge_duplicate_instance(PyObject *from, PyObject* to) {
+    // TODO: Is there some way to trigger a replacement?
+    // Probably not.
+    transfer_nurses_for_patient(from, to);
+}
+
 /// Clears all internal data from the instance and removes it from registered instances in
 /// preparation for deallocation.
 inline void clear_instance(PyObject *self) {

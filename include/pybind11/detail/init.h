@@ -53,7 +53,7 @@ struct instance_creation {
                 instance* dup = it_i->second;
                 assert(!dup->owned);
                 // Transition life support from this object to here.
-                transfer_nurses_for_patient((PyObject*)dup, (PyObject*)inst);
+                merge_duplicate_instance((PyObject*)dup, (PyObject*)inst);
                 // Only do this once, as the ranges may have shifted if the extra
                 // instance was destroyed.
                 break;
