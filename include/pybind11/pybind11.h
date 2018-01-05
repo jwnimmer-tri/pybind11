@@ -765,9 +765,11 @@ protected:
             return nullptr;
         } else {
             if (overloads->is_constructor && !self_value_and_holder.holder_constructed()) {
+                // TODO: What happens if the value and holder is constructed?
                 auto *pi = reinterpret_cast<instance *>(parent.ptr());
                 self_value_and_holder.type->init_instance(pi, nullptr);
             }
+            // TODO(eric.cousineau): Intercept case where a class `cast`s itself?
             return result.ptr();
         }
     }
