@@ -317,7 +317,7 @@ def test_unique_ptr_keep_alive():
     assert obj_stats.alive() == 1
     assert c_expose_stats.alive() == 1
     # We know that deleting `obj` will release the container.
-    # Another test is to release `obj` from `c_expose_stats`, but *directly* to another
+    # Another test is to release `obj` from `c_expose`, but *directly* to another
     # container in C++.
     c_expose_other = m.ContainerExposeOwnership(None)  # (also test None)
     assert c_expose_stats.alive() == 2
@@ -337,11 +337,19 @@ def test_unique_ptr_keep_alive():
 
     # One more time, with indirection introduced from C++.
     obj = m.UniquePtrHeld(100)
-    c_expose = m.create_container_expose_ownership(obj)
-    assert c_expose.get().value() == 100
+    c_expose = m.ContainerExposeOwnership(obj)
+    assert c_expose.get().value() == 100  # Triggers keep_alive.
+    # This transfers ownership.
+    c_expose_other = m.create_container_expose_ownership(c_expose)
+    assert c_expose.get() is None
+    assert obj_stats.alive() == 1
+    assert c_expose_stats.alive() == 2
+    # keep_alive should have been disabled by the ownership transfer.
+    del c_expose
+    pytest.gc_collect()
     assert obj_stats.alive() == 1
     assert c_expose_stats.alive() == 1
-    del c_expose
+    del c_expose_other
     pytest.gc_collect()
     assert obj_stats.alive() == 1
     assert c_expose_stats.alive() == 0

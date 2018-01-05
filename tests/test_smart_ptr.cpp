@@ -463,13 +463,12 @@ TEST_SUBMODULE(smart_ptr, m) {
     // See what happens when a container is created and destroyed in C++, and
     // another is returned.
     m.def("create_container_expose_ownership",
-        [](std::unique_ptr<UniquePtrHeld> obj) {
+        [](ContainerExposeOwnership* in) {
             // This container will be exposed in Python; however, it will disapper
             // once `obj` is destroyed in Python.
-            ContainerExposeOwnership tmp(std::move(obj));
-            if (tmp.get()->value() != 100)
+            if (in->get()->value() != 100)
                 throw std::runtime_error("Bad value");
-            return std::make_unique<ContainerExposeOwnership>(tmp.release());
+            return std::make_unique<ContainerExposeOwnership>(in->release());
         });
 
     // Ensure class is non-empty, so it's easier to detect double-free
