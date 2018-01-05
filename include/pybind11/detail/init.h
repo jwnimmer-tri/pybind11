@@ -40,31 +40,24 @@ NAMESPACE_BEGIN(initimpl)
 // This way, we can access a non-constructed instance / PyObject, before the
 // constructor has returned.
 // This should be placed wherever `.def("__init__")` is called (or where pickling occurs).
-// See `loader_life_support` for model.
 struct instance_creation {
-    inline static instance* current() {
-        assert(get_stack().size() > 0);
-        return get_stack().back();
-    }
-    inline instance_creation(instance* inst) : inst_(inst) {
-        get_stack().push_back(inst);
-    }
+    inline instance_creation(value_and_holder& v_h) : v_h_(v_h) {}
     inline ~instance_creation() {
-        auto& stack = get_stack();
-        assert(stack.size() > 0 && stack.back() == inst_);
-        stack.pop_back();
-        // Same heuristic from `cast`.
-        if (stack.capacity() > 16 && stack.size() != 0 && stack.capacity() / stack.size() > 2) {
-            stack.shrink_to_fit();
+        // Check for duplicate instances: instances that have the same value as the current one, but is not the same instance.
+        void* ptr = v_h_.value_ptr();
+        instance* inst = v_h_.inst;
+        auto it_instances = internals().registered_instances.equal_range(ptr);
+        for (auto it_i = it_instances.first; it_i != it_instances.second; ++it_i) {
+            if (it_i->second != inst) {
+                instance* dup = it_i->second;
+                assert(!dup->owned);
+                // Transition life support from this object to here.
+                transfer_nurses_for_patient((PyObject*)dup, (PyObject*)inst);
+            }
         }
     }
 private:
-    instance* inst_;
-
-    inline static std::vector<instance*>& get_stack() {
-        static auto &data = get_or_create_shared_data<std::vector<instance*>>("instance_creation_stack");
-        return data;
-    }
+    value_and_holder& v_h_;
 };
 
 inline void no_nullptr(void *ptr) {
@@ -196,7 +189,7 @@ struct constructor {
     template <typename Class, typename... Extra, enable_if_t<!Class::has_alias, int> = 0>
     static void execute(Class &cl, const Extra&... extra) {
         cl.def("__init__", [](value_and_holder &v_h, Args... args) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             v_h.value_ptr() = new Cpp<Class>{std::forward<Args>(args)...};
         }, is_new_style_constructor(), extra...);
     }
@@ -206,7 +199,7 @@ struct constructor {
                           std::is_constructible<Cpp<Class>, Args...>::value, int> = 0>
     static void execute(Class &cl, const Extra&... extra) {
         cl.def("__init__", [](value_and_holder &v_h, Args... args) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             if (Py_TYPE(v_h.inst) == v_h.type->type)
                 v_h.value_ptr() = new Cpp<Class>{std::forward<Args>(args)...};
             else
@@ -219,7 +212,7 @@ struct constructor {
                           !std::is_constructible<Cpp<Class>, Args...>::value, int> = 0>
     static void execute(Class &cl, const Extra&... extra) {
         cl.def("__init__", [](value_and_holder &v_h, Args... args) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             v_h.value_ptr() = new Alias<Class>{std::forward<Args>(args)...};
         }, is_new_style_constructor(), extra...);
     }
@@ -231,7 +224,7 @@ template <typename... Args> struct alias_constructor {
               enable_if_t<Class::has_alias && std::is_constructible<Alias<Class>, Args...>::value, int> = 0>
     static void execute(Class &cl, const Extra&... extra) {
         cl.def("__init__", [](value_and_holder &v_h, Args... args) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             v_h.value_ptr() = new Alias<Class>{std::forward<Args>(args)...};
         }, is_new_style_constructor(), extra...);
     }
@@ -263,7 +256,7 @@ struct factory<Func, void_type (*)(), Return(Args...)> {
         cl.def("__init__", [func]
         #endif
         (value_and_holder &v_h, Args... args) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             construct<Class>(v_h, func(std::forward<Args>(args)...),
                              Py_TYPE(v_h.inst) != v_h.type->type);
         }, is_new_style_constructor(), extra...);
@@ -301,7 +294,7 @@ struct factory<CFunc, AFunc, CReturn(CArgs...), AReturn(AArgs...)> {
         cl.def("__init__", [class_func, alias_func]
         #endif
         (value_and_holder &v_h, CArgs... args) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             if (Py_TYPE(v_h.inst) == v_h.type->type)
                 // If the instance type equals the registered type we don't have inheritance, so
                 // don't need the alias and can construct using the class function:
@@ -355,7 +348,7 @@ struct pickle_factory<Get, Set, RetState(Self), NewInstance(ArgState)> {
         cl.def("__setstate__", [func]
 #endif
         (value_and_holder &v_h, ArgState state) {
-            instance_creation guard(v_h.inst);
+            instance_creation guard(v_h);
             setstate<Class>(v_h, func(std::forward<ArgState>(state)),
                             Py_TYPE(v_h.inst) != v_h.type->type);
         }, is_new_style_constructor(), extra...);
@@ -364,9 +357,9 @@ struct pickle_factory<Get, Set, RetState(Self), NewInstance(ArgState)> {
 
 NAMESPACE_END(initimpl)
 
-inline handle get_current_init_instance() {
-    return {(PyObject*)initimpl::instance_creation::current()};
-}
+//inline handle get_current_init_instance() {
+//    return {(PyObject*)initimpl::instance_creation::current()};
+//}
 
 NAMESPACE_END(detail)
 NAMESPACE_END(pybind11)

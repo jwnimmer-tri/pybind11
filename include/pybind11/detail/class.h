@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include "../attr.h"
 
 NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
@@ -286,12 +288,24 @@ extern "C" inline int pybind11_object_init(PyObject *self, PyObject *, PyObject 
     return -1;
 }
 
+using LifeSupportMap = std::unordered_map<const PyObject*, std::vector<PyObject*>>;
+inline LifeSupportMap& get_nurses() {
+    static auto& out = get_or_create_shared_data<LifeSupportMap>("nurses");
+    return out;
+}
+
 inline void add_patient(PyObject *nurse, PyObject *patient) {
     auto &internals = get_internals();
     auto instance = reinterpret_cast<detail::instance *>(nurse);
     instance->has_patients = true;
     Py_INCREF(patient);
     internals.patients[nurse].push_back(patient);
+    get_nurses()[patient].push_back(nurse);
+}
+
+template <typename T>
+inline void clear_value(std::vector<T>& vec, const T& v) {
+    vec.erase(std::find(vec.begin(), vec.end(), v));
 }
 
 inline void clear_patients(PyObject *self) {
@@ -307,8 +321,25 @@ inline void clear_patients(PyObject *self) {
     auto patients = std::move(pos->second);
     internals.patients.erase(pos);
     instance->has_patients = false;
-    for (PyObject *&patient : patients)
+    auto& nurses = get_nurses();
+    for (PyObject *&patient : patients) {
+        clear_value(nurses[patient], self);
         Py_CLEAR(patient);
+    }
+}
+
+inline void transfer_nurses_for_patient(PyObject *from, PyObject* to) {
+    auto &internals = get_internals();
+    // Copy, same as above.
+    auto nurses_from = std::move(get_nurses()[from]);
+    for (auto* nurse : nurses_from) {
+        add_patient(nurse, to);
+        // Remove patient.
+        // TODO: Use `Py_CLEAR`?
+        // Will this do anything in PyPy?
+        clear_value(internals.patients[nurse], from);
+        Py_DECREF(from);
+    }
 }
 
 /// Clears all internal data from the instance and removes it from registered instances in
