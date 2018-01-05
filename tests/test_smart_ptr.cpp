@@ -442,6 +442,8 @@ TEST_SUBMODULE(smart_ptr, m) {
     // another is returned.
     m.def("create_container_expose_ownership",
         [](std::unique_ptr<UniquePtrHeld> obj) {
+            // This container will be exposed in Python; however, it will disapper
+            // once `obj` is destroyed in Python.
             ContainerExposeOwnership tmp(std::move(obj));
             if (tmp.get()->value() != 100)
                 throw std::runtime_error("Bad value");
