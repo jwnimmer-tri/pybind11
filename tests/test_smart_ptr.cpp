@@ -152,7 +152,8 @@ public:
         } else {
             cls.def(py::init<Ptr>());
         }
-        cls.def("get", &Container::get, py::return_value_policy::reference_internal);
+        // TODO: Why does this not work???
+        cls.def("get", &Container::get, py::keep_alive<0, 1>());//py::return_value_policy::reference_internal);
         cls.def("release", &Container::release);
         cls.def("reset", &Container::reset);
         cls.def("steal_from", &Container::steal_from);
