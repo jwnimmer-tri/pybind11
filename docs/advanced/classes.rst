@@ -65,10 +65,10 @@ helper class that is defined as follows:
 
 .. code-block:: cpp
 
-    class PyAnimal : public py::wrapper<Animal> {
+    class PyAnimal : public Animal {
     public:
         /* Inherit the constructors */
-        using py::wrapper<Animal>::wrapper;
+        using Animal::Animal;
 
         /* Trampoline (need one for each virtual function) */
         std::string go(int n_times) override {
@@ -90,15 +90,13 @@ function* slots, which defines the name of function in Python. This is required
 when the C++ and Python versions of the
 function have different names, e.g.  ``operator()`` vs ``__call__``.
 
-The base class ``py::wrapper<>`` is optional, but is recommended as it allows us to attach the lifetime of Python objects directly to C++ objects, explained in :ref:`virtual_inheritance_lifetime`.
-
 The binding code also needs a few minor adaptations (highlighted):
 
 .. code-block:: cpp
     :emphasize-lines: 2,4,5
 
     PYBIND11_MODULE(example, m) {
-        py::class_<Animal, PyAnimal /* <--- trampoline*/> animal(m, "Animal");
+        py::class_<Animal, py::wrapper<PyAnimal> /* <--- trampoline*/> animal(m, "Animal");
         animal
             .def(py::init<>())
             .def("go", &Animal::go);
@@ -119,7 +117,7 @@ Bindings should be made against the actual class, not the trampoline helper clas
 
 .. code-block:: cpp
 
-    py::class_<Animal, PyAnimal /* <--- trampoline*/> animal(m, "Animal");
+    py::class_<Animal, py::wrapper<PyAnimal> /* <--- trampoline*/> animal(m, "Animal");
         animal
             .def(py::init<>())
             .def("go", &PyAnimal::go); /* <--- THIS IS WRONG, use &Animal::go */
@@ -128,6 +126,16 @@ Note, however, that the above is sufficient for allowing python classes to
 extend ``Animal``, but not ``Dog``: see :ref:`virtual_and_inheritance` for the
 necessary steps required to providing proper overload support for inherited
 classes.
+
+The wrapper ``py::wrapper<>`` is optional, but is recommended as it
+allows us to attach the lifetime of Python objects directly to C++ objects,
+explained in :ref:`virtual_inheritance_lifetime`.
+
+.. note::
+
+    If you do use ``py::wrapper<>`` and you have defined factory
+    ``__init__`` methods, you *must* ensure that the alias variants return new
+    instances of ``py::wrapper<Alias>``, rather than just ``Alias``.
 
 The Python session below shows how to override ``Animal::go`` and invoke it via
 a virtual method call.
@@ -234,15 +242,15 @@ override the ``name()`` method):
 
 .. code-block:: cpp
 
-    class PyAnimal : public py::wrapper<Animal> {
+    class PyAnimal : public Animal {
     public:
-        using py::wrapper<Animal>::wrapper; // Inherit constructors
+        using Animal::Animal; // Inherit constructors
         std::string go(int n_times) override { PYBIND11_OVERLOAD_PURE(std::string, Animal, go, n_times); }
         std::string name() override { PYBIND11_OVERLOAD(std::string, Animal, name, ); }
     };
-    class PyDog : public py::wrapper<Dog> {
+    class PyDog : public Dog {
     public:
-        using py::wrapper<Dog>::wrapper; // Inherit constructors
+        using Dog::Dog; // Inherit constructors
         std::string go(int n_times) override { PYBIND11_OVERLOAD_PURE(std::string, Dog, go, n_times); }
         std::string name() override { PYBIND11_OVERLOAD(std::string, Dog, name, ); }
         std::string bark() override { PYBIND11_OVERLOAD(std::string, Dog, bark, ); }
@@ -262,9 +270,9 @@ declare or override any virtual methods itself:
 .. code-block:: cpp
 
     class Husky : public Dog {};
-    class PyHusky : public py::wrapper<Husky> {
+    class PyHusky : public Husky {
     public:
-        using py::wrapper<Husky>::wrapper; // Inherit constructors
+        using Husky::Husky; // Inherit constructors
         std::string go(int n_times) override { PYBIND11_OVERLOAD_PURE(std::string, Husky, go, n_times); }
         std::string name() override { PYBIND11_OVERLOAD(std::string, Husky, name, ); }
         std::string bark() override { PYBIND11_OVERLOAD(std::string, Husky, bark, ); }
@@ -272,14 +280,14 @@ declare or override any virtual methods itself:
 
 There is, however, a technique that can be used to avoid this duplication
 (which can be especially helpful for a base class with several virtual
-methods).  The technique (the Curiously Recurring Template Pattern) involves using template trampoline classes, as
+methods).  The technique involves using template trampoline classes, as
 follows:
 
 .. code-block:: cpp
 
-    template <class AnimalBase = Animal> class PyAnimal : public py::wrapper<AnimalBase> {
+    template <class AnimalBase = Animal> class PyAnimal : public AnimalBase {
     public:
-        using py::wrapper<AnimalBase>::wrapper; // Inherit constructors
+        using AnimalBase::AnimalBase; // Inherit constructors
         std::string go(int n_times) override { PYBIND11_OVERLOAD_PURE(std::string, AnimalBase, go, n_times); }
         std::string name() override { PYBIND11_OVERLOAD(std::string, AnimalBase, name, ); }
     };
@@ -301,9 +309,9 @@ The classes are then registered with pybind11 using:
 
 .. code-block:: cpp
 
-    py::class_<Animal, PyAnimal<>> animal(m, "Animal");
-    py::class_<Dog, PyDog<>> dog(m, "Dog");
-    py::class_<Husky, PyDog<Husky>> husky(m, "Husky");
+    py::class_<Animal, py::wrapper<PyAnimal<>>> animal(m, "Animal");
+    py::class_<Dog, py::wrapper<PyDog<>>> dog(m, "Dog");
+    py::class_<Husky, py::wrapper<PyDog<Husky>>> husky(m, "Husky");
     // ... add animal, dog, husky definitions
 
 Note that ``Husky`` did not require a dedicated trampoline template class at
@@ -323,6 +331,12 @@ can now create a python class that inherits from ``Dog``:
 
     See the file :file:`tests/test_virtual_functions.cpp` for complete examples
     using both the duplication and templated trampoline approaches.
+
+.. note::
+
+    If you do not want to specify ``py::wrapper<>`` for each type, you
+    can have ``PyAnimal`` inherit from ``py::wrapper<>``. Pybind will
+    detect if ``py::wrapper<>`` is present at any point in the chain.
 
 .. _extended_aliases:
 
@@ -1051,10 +1065,10 @@ For this example, we will build upon the above code for ``Animal`` with alias ``
         virtual std::string go(int n_times) = 0;
     };
 
-    class PyAnimal : public py::wrapper<Animal> {
+    class PyAnimal : public Animal {
     public:
         /* Inherit the constructors */
-        using py::wrapper<Animal>::wrapper;
+        using Animal::Animal;
         std::string go(int n_times) override {
             PYBIND11_OVERLOAD_PURE(std::string, Animal, go, n_times);
         }
@@ -1077,7 +1091,7 @@ And the following bindings:
 .. code-block:: cpp
 
     PYBIND11_MODULE(example, m) {
-        py::class_<Animal, PyAnimal, std::shared_ptr<Animal>> animal(m, "Animal");
+        py::class_<Animal, py::wrapper<PyAnimal>, std::shared_ptr<Animal>> animal(m, "Animal");
         animal
             .def(py::init<>())
             .def("go", &Animal::go);
