@@ -1392,11 +1392,14 @@ public:
         auto* tinfo = get_type_info();
         // TODO(eric.cousineau): Should relax this to not require a holder be constructed,
         // only that the holder itself be default (unique_ptr<>).
-        if (inst->owned || v_h.holder_constructed()) {
-            throw std::runtime_error("Derived Python object should live in C++");
+        if (inst->owned) {
+            throw std::runtime_error("reclaim_from_cpp: Python object already owned?");
+        }
+        if (v_h.holder_constructed()) {
+            throw std::runtime_error("reclaim_from_cpp: Holder already exists?");
         }
         if (!external_holder_raw) {
-            throw std::runtime_error("Internal error - not external holder?");
+            throw std::runtime_error("reclaim_from_cpp: not external holder?");
         }
         // Is this valid?
         handle h(reinterpret_cast<PyObject*>(inst));
@@ -1425,7 +1428,7 @@ public:
                 break;
             }
             default: {
-                throw std::runtime_error("Unsupported load type");
+                throw std::runtime_error("reclaim_from_cpp: Unsupported load type");
             }
         }
         inst->owned = true;
@@ -1715,6 +1718,9 @@ private:
         // Is there a way to check if `__del__` is an instance-assigned
         // method? (Rather than a class method?)
         object del_orig = getattr(h_type, "__del__", none());
+
+        // Set reclaim method.
+        inst->reclaim_from_cpp = reclaim_from_cpp;
 
 #if defined(PYPY_VERSION)
         // PyPy will not execute an arbitrarily-added `__del__` method.
