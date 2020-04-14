@@ -55,6 +55,9 @@ NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 template <typename... Args>
 void unused(Args&&...) {}
 
+template <return_value_policy policy = return_value_policy::automatic_reference, typename... Args>
+void print(Args &&...args);
+
 /// Wraps an arbitrary C++ function/method/lambda function/.. into a callable Python object
 class cpp_function : public function {
 public:
@@ -1707,6 +1710,8 @@ private:
         // TODO(eric.cousineau): Inject override of __del__ for intercepting C++ stuff
         handle self((PyObject*)inst);
         handle h_type = self.get_type();
+
+        ::pybind11::print("init_instance: ", !holder_ptr, h_type);
 
         // Use hacky Python-style inheritance check.
         PyTypeObject *py_type = (PyTypeObject*)h_type.ptr();

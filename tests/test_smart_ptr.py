@@ -1,8 +1,8 @@
 import pytest
 from pybind11_tests import smart_ptr as m
-from pybind11_tests import ConstructorStats
+# from pybind11_tests import ConstructorStats
 
-
+'''
 def test_smart_ptr(capture):
     # Object1
     for i, o in enumerate([m.make_object_1(), m.make_object_2(), m.MyObject1(3)], start=1):
@@ -335,8 +335,10 @@ def test_unique_ptr_overload_fail():
     out = m.unique_ptr_overload(obj, m.SecondT())
     assert out["obj"] is obj
     assert out["overload"] == 2
+'''
 
 
+@pytest.traced
 def test_unique_ptr_held_container_from_cpp():
 
     def check_reset(obj_new):
