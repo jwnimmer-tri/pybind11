@@ -7,108 +7,108 @@ matrix:
   # - Tests setup.py sdist and install (all header files should be present).
   # - Makes sure that everything still works without optional deps (numpy/scipy/eigen) and
   #   also tests the automatic discovery functions in CMake (Python version, C++ standard).
-  - os: linux
-    dist: xenial # Necessary to run doxygen 1.8.15
-    name: Style, docs, and pip
-    cache: false
-    before_install:
-    - pyenv global $(pyenv whence 2to3)  # activate all python versions
-    - PY_CMD=python3
-    - $PY_CMD -m pip install --user --upgrade pip wheel setuptools
-    install:
-    # breathe 4.14 doesn't work with bit fields. See https://github.com/michaeljones/breathe/issues/462
-    - $PY_CMD -m pip install --user --upgrade sphinx sphinx_rtd_theme breathe==4.13.1 flake8 pep8-naming pytest
-    - curl -fsSL https://sourceforge.net/projects/doxygen/files/rel-1.8.15/doxygen-1.8.15.linux.bin.tar.gz/download | tar xz
-    - export PATH="$PWD/doxygen-1.8.15/bin:$PATH"
-    script:
-    - tools/check-style.sh
-    - flake8
-    # TODO(eric.cousineau): Re-enable doc build at some point once `breathe` is unbroken.
-    # - $PY_CMD -m sphinx -W -b html docs docs/.build
-    - |
-      # Make sure setup.py distributes and installs all the headers
-      set -ex
-      $PY_CMD setup.py sdist
-      $PY_CMD -m pip install --user -U ./dist/*
-      installed=$($PY_CMD -c "import pybind11; print(pybind11.get_include(True) + '/pybind11')")
-      diff -rq $installed ./include/pybind11
-    - |
-      # Barebones build
-      set -ex
-      cmake -DCMAKE_BUILD_TYPE=Debug -DPYBIND11_WERROR=ON -DDOWNLOAD_CATCH=ON -DPYTHON_EXECUTABLE=$(which $PY_CMD) .
-      make pytest -j 2 && make cpptest -j 2
-  # The following are regular test configurations, including optional dependencies.
-  # With regard to each other they differ in Python version, C++ standard and compiler.
-  - os: linux
-    dist: trusty
-    name: Python 2.7, c++11, gcc 4.8
-    env: PYTHON=2.7 CPP=11 GCC=4.8
-    addons:
-      apt:
-        packages:
-          - cmake=2.\*
-          - cmake-data=2.\*
-  - os: linux
-    dist: trusty
-    name: Python 3.6, c++11, gcc 4.8
-    env: PYTHON=3.6 CPP=11 GCC=4.8
-    addons:
-      apt:
-        sources:
-          - deadsnakes
-        packages:
-          - python3.6-dev
-          - python3.6-venv
-          - cmake=2.\*
-          - cmake-data=2.\*
-  - os: linux
-    dist: trusty
-    env: PYTHON=2.7 CPP=14 GCC=6 CMAKE=1
-    name: Python 2.7, c++14, gcc 6, CMake test
-    addons:
-      apt:
-        sources:
-          - ubuntu-toolchain-r-test
-        packages:
-          - g++-6
-  - os: linux
-    dist: trusty
-    name: Python 3.5, c++14, gcc 6, Debug build
-    # N.B. `ensurepip` could be installed transitively by `python3.5-venv`, but
-    # seems to have apt conflicts (at least for Trusty). Use Docker instead.
-    services: docker
-    env: DOCKER=debian:stretch PYTHON=3.5 CPP=14 GCC=6 DEBUG=1
-  - os: linux
-    dist: xenial
-    env: PYTHON=3.6 CPP=17 GCC=7
-    name: Python 3.6, c++17, gcc 7
-    addons:
-      apt:
-        sources:
-          - deadsnakes
-          - ubuntu-toolchain-r-test
-        packages:
-          - g++-7
-          - python3.6-dev
-          - python3.6-venv
-  - os: linux
-    dist: xenial
-    env: PYTHON=3.6 CPP=17 CLANG=7
-    name: Python 3.6, c++17, Clang 7
-    addons:
-      apt:
-        sources:
-          - deadsnakes
-          - llvm-toolchain-xenial-7
-        packages:
-          - python3.6-dev
-          - python3.6-venv
-          - clang-7
-          - libclang-7-dev
-          - llvm-7-dev
-          - lld-7
-          - libc++-7-dev
-          - libc++abi-7-dev  # Why is this necessary???
+  # - os: linux
+  #   dist: xenial # Necessary to run doxygen 1.8.15
+  #   name: Style, docs, and pip
+  #   cache: false
+  #   before_install:
+  #   - pyenv global $(pyenv whence 2to3)  # activate all python versions
+  #   - PY_CMD=python3
+  #   - $PY_CMD -m pip install --user --upgrade pip wheel setuptools
+  #   install:
+  #   # breathe 4.14 doesn't work with bit fields. See https://github.com/michaeljones/breathe/issues/462
+  #   - $PY_CMD -m pip install --user --upgrade sphinx sphinx_rtd_theme breathe==4.13.1 flake8 pep8-naming pytest
+  #   - curl -fsSL https://sourceforge.net/projects/doxygen/files/rel-1.8.15/doxygen-1.8.15.linux.bin.tar.gz/download | tar xz
+  #   - export PATH="$PWD/doxygen-1.8.15/bin:$PATH"
+  #   script:
+  #   - tools/check-style.sh
+  #   - flake8
+  #   # TODO(eric.cousineau): Re-enable doc build at some point once `breathe` is unbroken.
+  #   # - $PY_CMD -m sphinx -W -b html docs docs/.build
+  #   - |
+  #     # Make sure setup.py distributes and installs all the headers
+  #     set -ex
+  #     $PY_CMD setup.py sdist
+  #     $PY_CMD -m pip install --user -U ./dist/*
+  #     installed=$($PY_CMD -c "import pybind11; print(pybind11.get_include(True) + '/pybind11')")
+  #     diff -rq $installed ./include/pybind11
+  #   - |
+  #     # Barebones build
+  #     set -ex
+  #     cmake -DCMAKE_BUILD_TYPE=Debug -DPYBIND11_WERROR=ON -DDOWNLOAD_CATCH=ON -DPYTHON_EXECUTABLE=$(which $PY_CMD) .
+  #     make pytest -j 2 && make cpptest -j 2
+  # # The following are regular test configurations, including optional dependencies.
+  # # With regard to each other they differ in Python version, C++ standard and compiler.
+  # - os: linux
+  #   dist: trusty
+  #   name: Python 2.7, c++11, gcc 4.8
+  #   env: PYTHON=2.7 CPP=11 GCC=4.8
+  #   addons:
+  #     apt:
+  #       packages:
+  #         - cmake=2.\*
+  #         - cmake-data=2.\*
+  # - os: linux
+  #   dist: trusty
+  #   name: Python 3.6, c++11, gcc 4.8
+  #   env: PYTHON=3.6 CPP=11 GCC=4.8
+  #   addons:
+  #     apt:
+  #       sources:
+  #         - deadsnakes
+  #       packages:
+  #         - python3.6-dev
+  #         - python3.6-venv
+  #         - cmake=2.\*
+  #         - cmake-data=2.\*
+  # - os: linux
+  #   dist: trusty
+  #   env: PYTHON=2.7 CPP=14 GCC=6 CMAKE=1
+  #   name: Python 2.7, c++14, gcc 6, CMake test
+  #   addons:
+  #     apt:
+  #       sources:
+  #         - ubuntu-toolchain-r-test
+  #       packages:
+  #         - g++-6
+  # - os: linux
+  #   dist: trusty
+  #   name: Python 3.5, c++14, gcc 6, Debug build
+  #   # N.B. `ensurepip` could be installed transitively by `python3.5-venv`, but
+  #   # seems to have apt conflicts (at least for Trusty). Use Docker instead.
+  #   services: docker
+  #   env: DOCKER=debian:stretch PYTHON=3.5 CPP=14 GCC=6 DEBUG=1
+  # - os: linux
+  #   dist: xenial
+  #   env: PYTHON=3.6 CPP=17 GCC=7
+  #   name: Python 3.6, c++17, gcc 7
+  #   addons:
+  #     apt:
+  #       sources:
+  #         - deadsnakes
+  #         - ubuntu-toolchain-r-test
+  #       packages:
+  #         - g++-7
+  #         - python3.6-dev
+  #         - python3.6-venv
+  # - os: linux
+  #   dist: xenial
+  #   env: PYTHON=3.6 CPP=17 CLANG=7
+  #   name: Python 3.6, c++17, Clang 7
+  #   addons:
+  #     apt:
+  #       sources:
+  #         - deadsnakes
+  #         - llvm-toolchain-xenial-7
+  #       packages:
+  #         - python3.6-dev
+  #         - python3.6-venv
+  #         - clang-7
+  #         - libclang-7-dev
+  #         - llvm-7-dev
+  #         - lld-7
+  #         - libc++-7-dev
+  #         - libc++abi-7-dev  # Why is this necessary???
   - os: linux
     dist: xenial
     env: PYTHON=3.8 CPP=17 GCC=7
@@ -137,45 +137,45 @@ matrix:
         # Barebones build
         cmake -DCMAKE_BUILD_TYPE=Debug -DPYBIND11_WERROR=ON -DDOWNLOAD_CATCH=ON -DPYTHON_EXECUTABLE=$(which $PY_CMD) .
         make pytest -j 2 && make cpptest -j 2
-  - os: osx
-    name: Python 2.7, c++14, AppleClang 7.3, CMake test
-    osx_image: xcode7.3
-    env: PYTHON=2.7 CPP=14 CLANG CMAKE=1
-  - os: osx
-    name: Python 3.7, c++14, AppleClang 9, Debug build
-    osx_image: xcode9.4
-    env: PYTHON=3.7 CPP=14 CLANG DEBUG=1
-  # WARNING: This current fails on download. Should try to upgrade OS + Python version?
-  # # Test a PyPy 2.7 build
+  # - os: osx
+  #   name: Python 2.7, c++14, AppleClang 7.3, CMake test
+  #   osx_image: xcode7.3
+  #   env: PYTHON=2.7 CPP=14 CLANG CMAKE=1
+  # - os: osx
+  #   name: Python 3.7, c++14, AppleClang 9, Debug build
+  #   osx_image: xcode9.4
+  #   env: PYTHON=3.7 CPP=14 CLANG DEBUG=1
+  # # WARNING: This current fails on download. Should try to upgrade OS + Python version?
+  # # # Test a PyPy 2.7 build
+  # # - os: linux
+  # #   dist: trusty
+  # #   env: PYPY=5.8 PYTHON=2.7 CPP=11 GCC=4.8
+  # #   name: PyPy 5.8, Python 2.7, c++11, gcc 4.8
+  # #   addons:
+  # #     apt:
+  # #       packages:
+  # #         - libblas-dev
+  # #         - liblapack-dev
+  # #         - gfortran
+  # # Build in 32-bit mode and tests against the CMake-installed version
   # - os: linux
   #   dist: trusty
-  #   env: PYPY=5.8 PYTHON=2.7 CPP=11 GCC=4.8
-  #   name: PyPy 5.8, Python 2.7, c++11, gcc 4.8
-  #   addons:
-  #     apt:
-  #       packages:
-  #         - libblas-dev
-  #         - liblapack-dev
-  #         - gfortran
-  # Build in 32-bit mode and tests against the CMake-installed version
-  - os: linux
-    dist: trusty
-    services: docker
-    env: DOCKER=i386/debian:stretch PYTHON=3.5 CPP=14 GCC=6 INSTALL=1
-    name: Python 3.5, c++14, gcc 6, 32-bit
-    script:
-      - |
-        # Consolidated 32-bit Docker Build + Install
-        set -ex
-        $SCRIPT_RUN_PREFIX sh -c "
-          set -ex
-          cmake ${CMAKE_EXTRA_ARGS} -DPYBIND11_INSTALL=1 -DPYBIND11_TEST=0 .
-          make install
-          cp -a tests /pybind11-tests
-          mkdir /build-tests && cd /build-tests
-          cmake ../pybind11-tests ${CMAKE_EXTRA_ARGS} -DPYBIND11_WERROR=ON
-          make pytest -j 2"
-        set +ex
+  #   services: docker
+  #   env: DOCKER=i386/debian:stretch PYTHON=3.5 CPP=14 GCC=6 INSTALL=1
+  #   name: Python 3.5, c++14, gcc 6, 32-bit
+  #   script:
+  #     - |
+  #       # Consolidated 32-bit Docker Build + Install
+  #       set -ex
+  #       $SCRIPT_RUN_PREFIX sh -c "
+  #         set -ex
+  #         cmake ${CMAKE_EXTRA_ARGS} -DPYBIND11_INSTALL=1 -DPYBIND11_TEST=0 .
+  #         make install
+  #         cp -a tests /pybind11-tests
+  #         mkdir /build-tests && cd /build-tests
+  #         cmake ../pybind11-tests ${CMAKE_EXTRA_ARGS} -DPYBIND11_WERROR=ON
+  #         make pytest -j 2"
+  #       set +ex
 cache:
   directories:
   - $HOME/.local/bin
