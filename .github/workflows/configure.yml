@@ -22,7 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [ubuntu-20.04, macos-latest] #, windows-latest]
+        # N.B. macos-latest seems broken on current CI.
+        runs-on: [ubuntu-20.04]  # , macos-latest, windows-latest]
         arch: [x64]
         cmake: ["3.26"]
 
@@ -35,9 +36,9 @@ jobs:
           arch: x64
           cmake: "3.27"
 
-        - runs-on: macos-latest
-          arch: x64
-          cmake: "3.7"
+        # - runs-on: macos-latest
+        #   arch: x64
+        #   cmake: "3.7"
 
         # - runs-on: windows-2019
         #   arch: x64 # x86 compilers seem to be missing on 2019 image
@@ -47,10 +48,10 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Setup Python 3.7
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: 3.7
         architecture: ${{ matrix.arch }}
@@ -61,7 +62,7 @@ jobs:
     # An action for adding a specific version of CMake:
     #   https://github.com/jwlawson/actions-setup-cmake
     - name: Setup CMake ${{ matrix.cmake }}
-      uses: jwlawson/actions-setup-cmake@v1.14
+      uses: jwlawson/actions-setup-cmake@v2.0
       with:
         cmake-version: ${{ matrix.cmake }}
 
