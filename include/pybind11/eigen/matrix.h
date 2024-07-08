@@ -283,6 +283,8 @@ eigen_array_cast(typename props::Type const &src, handle base = handle(), bool w
                       {(size_t) src.size()},
                       nullptr,
                       empty_base);
+            auto _m_arr = a.mutable_unchecked<object, 1>();
+
             constexpr bool is_row = props::fixed_rows && props::rows == 1;
             for (ssize_t i = 0; i < src.size(); ++i) {
                 const Scalar src_val = is_row ? src(0, i) : src(i, 0);
@@ -291,13 +293,16 @@ eigen_array_cast(typename props::Type const &src, handle base = handle(), bool w
                 if (!value_) {
                     return handle();
                 }
-                a.attr("itemset")(i, value_);
+
+                _m_arr[i] = value_;
             }
         } else {
             a = array(npy_format_descriptor<Scalar>::dtype(),
                       {(size_t) src.rows(), (size_t) src.cols()},
                       nullptr,
                       empty_base);
+            auto _m_arr = a.mutable_unchecked<object, 2>();
+
             for (ssize_t i = 0; i < src.rows(); ++i) {
                 for (ssize_t j = 0; j < src.cols(); ++j) {
                     auto value_ = reinterpret_steal<object>(
@@ -305,7 +310,8 @@ eigen_array_cast(typename props::Type const &src, handle base = handle(), bool w
                     if (!value_) {
                         return handle();
                     }
-                    a.attr("itemset")(i, j, value_);
+
+                    _m_arr(i,j) = value_;
                 }
             }
         }
