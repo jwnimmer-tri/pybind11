@@ -30,7 +30,13 @@ typedef Eigen::Matrix<ADScalar, Eigen::Dynamic, 1> VectorXADScalar;
 typedef Eigen::Matrix<ADScalar, 1, Eigen::Dynamic> VectorXADScalarR;
 typedef Eigen::Matrix<ADScalar, 5, 1> Vector5ADScalar;
 typedef Eigen::Matrix<ADScalar, 1, 6> Vector6ADScalarR;
-PYBIND11_NUMPY_OBJECT_DTYPE(ADScalar);
+
+namespace pybind11 {
+namespace detail {
+template <>
+struct npy_format_descriptor<ADScalar> : public npy_format_descriptor<PyObject *> {};
+} /* namespace detail */
+} /* namespace pybind11 */
 
 // Sets/resets a testing reference matrix to have values of 10*r + c, where r and c are the
 // (1-based) row/column number.

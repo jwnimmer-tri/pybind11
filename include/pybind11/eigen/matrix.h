@@ -138,7 +138,7 @@ struct eigen_extract_stride<Eigen::Ref<PlainObjectType, Options, StrideType>> {
 
 template <typename Scalar>
 using is_pyobject_dtype
-    = std::is_base_of<npy_format_descriptor_object, npy_format_descriptor<Scalar>>;
+    = std::is_base_of<npy_format_descriptor<PyObject*>, npy_format_descriptor<Scalar>>;
 
 // Helper struct for extracting information from an Eigen type
 template <typename Type_>
