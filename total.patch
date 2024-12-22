@@ -1,0 +1,1868 @@
+diff --git a/include/pybind11/attr.h b/include/pybind11/attr.h
+index 1044db94..98277abd 100644
+--- a/include/pybind11/attr.h
++++ b/include/pybind11/attr.h
+@@ -296,11 +296,16 @@ struct type_record {
+     void *(*operator_new)(size_t) = nullptr;
+ 
+     /// Function pointer to class_<..>::init_instance
+-    void (*init_instance)(instance *, const void *) = nullptr;
++    void (*init_instance)(instance *, holder_erased) = nullptr;
+ 
+     /// Function pointer to class_<..>::dealloc
+     void (*dealloc)(detail::value_and_holder &) = nullptr;
+ 
++#if DRAKE_HOLDER
++    /// See `type_info::has_cpp_release`.
++    instance::type_release_info_t release_info;
++#endif  // DRAKE_HOLDER
++
+     /// List of base classes of the newly created type
+     list bases;
+ 
+diff --git a/include/pybind11/cast.h b/include/pybind11/cast.h
+index 02d9488d..a75fd906 100644
+--- a/include/pybind11/cast.h
++++ b/include/pybind11/cast.h
+@@ -747,6 +747,11 @@ struct holder_helper {
+     static auto get(const T &p) -> decltype(p.get()) { return p.get(); }
+ };
+ 
++inline const detail::type_info *get_lowest_type(handle src, bool do_throw = true) {
++    auto *py_type = (PyTypeObject *) src.get_type().ptr();
++    return detail::get_type_info(py_type, do_throw);
++}
++
+ /// Type caster for holder types like std::shared_ptr, etc.
+ /// The SFINAE hook is provided to help work around the current lack of support
+ /// for smart-pointer interoperability. Please consider it an implementation
+@@ -763,7 +768,16 @@ public:
+     using base::typeinfo;
+     using base::value;
+ 
+-    bool load(handle src, bool convert) {
++#if DRAKE_HOLDER
++    handle src;
++#endif  // DRAKE_HOLDER
++
++    bool load(handle src_in, bool convert) {
++#if DRAKE_HOLDER
++        src = src_in;
++#else  // DRAKE_HOLDER
++        auto& src = src_in;
++#endif  // DRAKE_HOLDER
+         return base::template load_impl<copyable_holder_caster<type, holder_type>>(src, convert);
+     }
+ 
+@@ -774,11 +788,20 @@ public:
+     explicit operator holder_type *() { return std::addressof(holder); }
+     explicit operator holder_type &() { return holder; }
+ 
++    // Risk increasing the `shared_ptr` ref count temporarily to maintain writeable
++    // semantics without too much `const_cast<>` ooginess.
++    static handle cast(holder_type &&src, return_value_policy, handle) {
++        const auto *ptr = holder_helper<holder_type>::get(src);
++        return type_caster_base<type>::cast_holder(ptr, holder_erased(std::addressof(src)));
++    }
++
+     static handle cast(const holder_type &src, return_value_policy, handle) {
+         const auto *ptr = holder_helper<holder_type>::get(src);
+-        return type_caster_base<type>::cast_holder(ptr, &src);
++        return type_caster_base<type>::cast_holder(ptr, holder_erased(std::addressof(src)));
+     }
+ 
++    // TODO(eric.cousineau): Define cast_op_type???
++
+ protected:
+     friend class type_caster_generic;
+     void check_holder_compat() {
+@@ -787,7 +810,10 @@ protected:
+         }
+     }
+ 
+-    bool load_value(value_and_holder &&v_h) {
++    bool load_value(value_and_holder &&v_h, LoadType load_type) {
++        // TODO(eric.cousineau): Restore `do_relelase_to_cpp` logic?
++        (void) load_type;
++
+         if (v_h.holder_constructed()) {
+             value = v_h.value_ptr();
+             holder = v_h.template holder<holder_type>();
+@@ -826,6 +852,10 @@ protected:
+     static bool try_direct_conversions(handle) { return false; }
+ 
+     holder_type holder;
++#if DRAKE_HOLDER
++    constexpr static detail::HolderTypeId holder_type_id
++        = detail::get_holder_type_id<holder_type>::value;
++#endif  // DRAKE_HOLDER
+ };
+ 
+ /// Specialize for the common std::shared_ptr, so users don't need to
+@@ -836,15 +866,128 @@ class type_caster<std::shared_ptr<T>> : public copyable_holder_caster<T, std::sh
+ /// Please consider the SFINAE hook an implementation detail, as explained
+ /// in the comment for the copyable_holder_caster.
+ template <typename type, typename holder_type, typename SFINAE = void>
+-struct move_only_holder_caster {
++struct move_only_holder_caster : type_caster_base<type> {
++    using base = type_caster_base<type>;
++    static_assert(std::is_base_of<base, type_caster<type>>::value,
++                  "Holder classes are only supported for custom types");
++    using base::base;
++    using base::cast;
++    using base::typeinfo;
++    using base::value;
++
++    // We must explicitly define the default constructor(s) since we define a
++    // destructor; otherwise, the compiler will incorrectly use the copy
++    // constructor.
++    move_only_holder_caster() = default;
++    move_only_holder_caster(move_only_holder_caster &&) = default;
++    move_only_holder_caster(const move_only_holder_caster &) = delete;
++    ~move_only_holder_caster() {
++#if DRAKE_HOLDER
++        if (holder) {
++            // If the argument was loaded into C++, but not transferred out,
++            // then this was most likely part of a failed overload in
++            // `argument_loader`. Transfer ownership back to Python.
++            move_only_holder_caster::cast(std::move(holder), return_value_policy{}, handle{});
++        }
++#endif  // DRAKE_HOLDER
++    }
++
+     static_assert(std::is_base_of<type_caster_base<type>, type_caster<type>>::value,
+                   "Holder classes are only supported for custom types");
+ 
+     static handle cast(holder_type &&src, return_value_policy, handle) {
++        // Move `src` so that `holder_helper<>::get()` can call `release` if need be.
++        // That way, if we mix `holder_type`s, we don't have to worry about `existing_holder`
++        // from being mistakenly reinterpret_cast'd to `shared_ptr<type>` (#1138).
+         auto *ptr = holder_helper<holder_type>::get(src);
+-        return type_caster_base<type>::cast_holder(ptr, std::addressof(src));
++        return type_caster_base<type>::cast_holder(ptr, holder_erased(std::addressof(src)));
++    }
++
++    // Disable these?
++    //  explicit operator type*() { return this->value; }
++    //  explicit operator type&() { return *(this->value); }
++
++    //  explicit operator holder_type*() { return &holder; }
++
++    // Force rvalue.
++    template <typename T>
++    using cast_op_type = holder_type &&;
++
++#if DRAKE_HOLDER
++    explicit operator holder_type &&() { return std::move(holder); }
++#endif  // DRAKE_HOLDER
++
++    bool load(handle src, bool convert) {
++        return base::template load_impl<move_only_holder_caster>(src, convert);
+     }
++
+     static constexpr auto name = type_caster_base<type>::name;
++
++#if DRAKE_HOLDER
++protected:
++    friend class type_caster_generic;
++    void check_holder_compat() {
++        if (!typeinfo->default_holder)
++            throw cast_error("Unable to load a non-default holder type (unique_ptr)");
++    }
++
++    bool load_value(value_and_holder &&v_h, LoadType load_type) {
++        // TODO(eric.cousineau): This should try and find the downcast-lowest
++        // level (closest to child) `release_to_cpp` method that is derived-releasable
++        // (which derives from `wrapper<type>`).
++        // This should resolve general casting, and should also avoid alias
++        // branch issues:
++        //   Example: `Base` has wrapper `PyBase` which extends `wrapper<Base>`.
++        //   `Child` extends `Base`, has its own wrapper `PyChild`, which extends
++        //   `wrapper<Child>`.
++        //   Anything deriving from `Child` does not derive from `PyBase`, so we should
++        //   NOT try to release using `PyBase`s mechanism.
++        //   Additionally, if `Child` does not have a wrapper (for whatever reason) and is
++        //   extended, then we still can NOT use `PyBase` since it's not part of the hierachy.
++        handle src = (PyObject *) v_h.inst;
++        object obj = reinterpret_borrow<object>(src);
++        // Try to get the lowest-hierarchy level of the type.
++        // This requires that we are single-inheritance at most.
++        const detail::type_info *lowest_type = nullptr;
++        switch (load_type) {
++            case LoadType::PureCpp: {
++                // We already have the lowest type.
++                lowest_type = typeinfo;
++                break;
++            }
++            // If the base type is explicitly mentioned, then we can rely on
++            // `DerivedCppSinglePySingle` being used.
++            case LoadType::DerivedCppSinglePySingle:
++                // However, if it is not, it may be that we have a C++ type inheriting from another
++                // C++ type without the inheritance being registered. In this case, we delegate by
++                // effectively downcasting in Python by finding the lowest-level type.
++                // @note No `break` here on purpose!
++            case LoadType::ConversionNeeded: {
++                // Try to get the lowest-hierarchy (closets to child class) of the type.
++                // The usage of `get_type_info` implicitly requires single inheritance.
++                auto *py_type = (PyTypeObject *) obj.get_type().ptr();
++                lowest_type = detail::get_type_info(py_type);
++                break;
++            }
++            case LoadType::DerivedCppMulti: {
++                throw std::runtime_error("pybind11 does not support avoiding slicing with "
++                                         "multiple inheritance");
++            }
++            default: {
++                throw std::runtime_error("Unsupported load type");
++            }
++        }
++        if (!lowest_type)
++            throw std::runtime_error("No valid lowest type. Internal error?");
++        auto &release_info = lowest_type->release_info;
++        if (!release_info.release_to_cpp)
++            throw std::runtime_error("No release mechanism in lowest type?");
++        release_info.release_to_cpp(v_h.inst, &holder, std::move(obj));
++        return true;
++    }
++
++    holder_type holder;
++#endif  // DRAKE_HOLDER
+ };
+ 
+ template <typename type, typename deleter>
+@@ -1081,29 +1224,29 @@ template <typename T>
+ using move_is_plain_type
+     = satisfies_none_of<T, std::is_void, std::is_pointer, std::is_reference, std::is_const>;
+ template <typename T, typename SFINAE = void>
+-struct move_always : std::false_type {};
++struct move_common : std::false_type {};
+ template <typename T>
+-struct move_always<
++struct move_common<
+     T,
+-    enable_if_t<
+-        all_of<move_is_plain_type<T>,
+-               negation<is_copy_constructible<T>>,
+-               is_move_constructible<T>,
+-               std::is_same<decltype(std::declval<make_caster<T>>().operator T &()), T &>>::value>>
++    enable_if_t<all_of<
++        move_is_plain_type<T>,
++        is_move_constructible<T>,
++        std::is_same<intrinsic_t<typename make_caster<T>::template cast_op_type<T &>>, T>>::value>>
++    : std::true_type {};
++template <typename T, typename SFINAE = void>
++struct move_always : std::false_type {};
++template <typename T>
++struct move_always<T,
++                   enable_if_t<all_of<move_common<T>, negation<is_copy_constructible<T>>>::value>>
+     : std::true_type {};
+ template <typename T, typename SFINAE = void>
+ struct move_if_unreferenced : std::false_type {};
+ template <typename T>
+-struct move_if_unreferenced<
+-    T,
+-    enable_if_t<
+-        all_of<move_is_plain_type<T>,
+-               negation<move_always<T>>,
+-               is_move_constructible<T>,
+-               std::is_same<decltype(std::declval<make_caster<T>>().operator T &()), T &>>::value>>
++struct move_if_unreferenced<T,
++                            enable_if_t<all_of<move_common<T>, is_copy_constructible<T>>::value>>
+     : std::true_type {};
+ template <typename T>
+-using move_never = none_of<move_always<T>, move_if_unreferenced<T>>;
++using move_never = negation<move_common<T>>;
+ 
+ // Detect whether returning a `type` from a cast on type's type_caster is going to result in a
+ // reference or pointer to a local variable of the type_caster.  Basically, only
+@@ -1240,22 +1383,37 @@ inline void handle::cast() const {
+ }
+ 
+ template <typename T>
+-detail::enable_if_t<!detail::move_never<T>::value, T> move(object &&obj) {
+-    if (obj.ref_count() > 1) {
++detail::enable_if_t<
++    // TODO(eric.cousineau): Figure out how to prevent perfect-forwarding more elegantly.
++    std::is_rvalue_reference<T &&>::value && !detail::is_pyobject<detail::intrinsic_t<T>>::value,
++    object>
++move(T &&value) {
++    // TODO(eric.cousineau): Add policies, parent, etc.
++    // It'd be nice to supply a parent, but for now, just leave it as-is.
++    handle no_parent;
++    return reinterpret_steal<object>(detail::make_caster<T>::cast(
++        std::move(value), return_value_policy::take_ownership, no_parent));
++}
++
++template <typename T>
++detail::enable_if_t<!detail::move_never<T>::value, T> move(object &&obj) {\
++    if (detail::cast_is_temporary_value_reference<T>::value) {
++        if (obj.ref_count() > 1) {
+ #if !defined(PYBIND11_DETAILED_ERROR_MESSAGES)
+-        throw cast_error(
+-            "Unable to cast Python " + str(type::handle_of(obj)).cast<std::string>()
+-            + " instance to C++ rvalue: instance has multiple references"
+-              " (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)");
++            throw cast_error(
++                "Unable to cast Python " + str(type::handle_of(obj)).cast<std::string>()
++                + " instance to C++ rvalue: instance has multiple references"
++                    " (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)");
+ #else
+-        throw cast_error("Unable to move from Python "
+-                         + str(type::handle_of(obj)).cast<std::string>() + " instance to C++ "
+-                         + type_id<T>() + " instance: instance has multiple references");
++            throw cast_error("Unable to move from Python "
++                             + str(type::handle_of(obj)).cast<std::string>() + " instance to C++ "
++                             + type_id<T>() + " instance: instance has multiple references");
+ #endif
++        }
+     }
+ 
+     // Move into a temporary and return that, because the reference may be a local value of `conv`
+-    T ret = std::move(detail::load_type<T>(obj).operator T &());
++    T ret = std::move(detail::cast_op<T>(detail::load_type<T>(obj)));
+     return ret;
+ }
+ 
+diff --git a/include/pybind11/detail/common.h b/include/pybind11/detail/common.h
+index 454e6061..5b77440c 100644
+--- a/include/pybind11/detail/common.h
++++ b/include/pybind11/detail/common.h
+@@ -545,6 +545,15 @@ enum class return_value_policy : uint8_t {
+     reference_internal
+ };
+ 
++class object;
++
++#ifndef DRAKE_ENABLE_HOLDER
++#define DRAKE_ENABLE_HOLDER 1
++#endif
++#if DRAKE_ENABLE_HOLDER
++#define DRAKE_HOLDER 1
++#endif
++
+ PYBIND11_NAMESPACE_BEGIN(detail)
+ 
+ inline static constexpr int log2(size_t n, int k = 0) {
+@@ -568,6 +577,84 @@ constexpr size_t instance_simple_holder_in_ptrs() {
+     return size_in_ptrs(sizeof(std::shared_ptr<int>));
+ }
+ 
++#if DRAKE_HOLDER
++enum class HolderTypeId {
++    Unknown,
++    UniquePtr,
++    SharedPtr,
++};
++template <typename holder_type, typename SFINAE = void>
++struct get_holder_type_id {
++    static constexpr HolderTypeId value = HolderTypeId::Unknown;
++};
++template <typename T>
++struct get_holder_type_id<std::shared_ptr<T>, void> {
++    static constexpr HolderTypeId value = HolderTypeId::SharedPtr;
++};
++template <typename T, typename Deleter>
++struct get_holder_type_id<std::unique_ptr<T, Deleter>, void> {
++    // TODO(eric.cousineau): Should this only specialize for `std::default_deleter`?
++    static constexpr HolderTypeId value = HolderTypeId::UniquePtr;
++};
++
++class holder_erased {
++public:
++    holder_erased() = default;
++    holder_erased(const holder_erased &) = default;
++    holder_erased &operator=(const holder_erased &) = default;
++
++    template <typename holder_type>
++    holder_erased(const holder_type *holder)
++        : ptr_(const_cast<holder_type *>(holder)),
++          type_id_(get_holder_type_id<holder_type>::value), is_const_(true) {}
++
++    template <typename holder_type>
++    holder_erased(holder_type *holder) : holder_erased(static_cast<const holder_type *>(holder)) {
++        is_const_ = false;
++    }
++
++    holder_erased(const void *ptr, HolderTypeId type_id)
++        : ptr_(const_cast<void *>(ptr)), type_id_(type_id), is_const_(true) {}
++
++    holder_erased(void *ptr, HolderTypeId type_id)
++        : ptr_(ptr), type_id_(type_id), is_const_(false) {}
++
++    holder_erased(std::nullptr_t) {}
++
++    void *ptr() const { return ptr_; }
++    HolderTypeId type_id() const { return type_id_; }
++
++    template <typename holder_type>
++    holder_type &mutable_cast() const {
++        if (is_const_)
++            throw std::runtime_error("Trying to mutate const reference?");
++        return do_cast<holder_type>();
++    }
++
++    template <typename holder_type>
++    const holder_type &cast() const {
++        return do_cast<holder_type>();
++    }
++
++    operator bool() const { return ptr_; }
++
++private:
++    template <typename holder_type>
++    holder_type &do_cast() const {
++        if (type_id_ != get_holder_type_id<holder_type>::value) {
++            throw std::runtime_error("Mismatch on holder type.");
++        }
++        return *reinterpret_cast<holder_type *>(ptr_);
++    }
++
++    void *ptr_{};
++    HolderTypeId type_id_{HolderTypeId::Unknown};
++    bool is_const_{true};
++};
++#else  // DRAKE_HOLDER
++using holder_erased = const void*;
++#endif  // DRAKE_HOLDER
++
+ // Forward declarations
+ struct type_info;
+ struct value_and_holder;
+@@ -620,6 +707,28 @@ struct instance {
+     /// If true, get_internals().patients has an entry for this object
+     bool has_patients : 1;
+ 
++#if DRAKE_HOLDER
++    typedef void (*release_to_cpp_t)(instance *inst, holder_erased external_holder, object &&obj);
++    using reclaim_from_cpp_t = object (*)(instance *, holder_erased);
++
++    struct type_release_info_t {
++        // Release an instance to C++ for pure C++ instances or Python-derived classes.
++        release_to_cpp_t release_to_cpp = nullptr;
++
++        // For classes wrapped in `wrapper<>`. See `move_only_holder_caster` for more info.
++        // Pure / direct C++ objects do not need any fancy releasing mechanisms. They are simply
++        // unwrapped and passed back.
++        bool can_derive_from_wrapper = false;
++
++        // The holder that is contained by this class.
++        HolderTypeId holder_type_id = HolderTypeId::Unknown;
++    };
++    /// If the instance is a Python-derived type that is owned in C++, then this method
++    /// will permit the instance to be reclaimed back by Python.
++    // TODO(eric.cousineau): This may not be necessary. See note in `type_caster_generic::cast`.
++    reclaim_from_cpp_t reclaim_from_cpp = nullptr;
++#endif  // DRAKE_HOLDER
++
+     /// Initializes all of the above type/values/holders data (but not the instance values
+     /// themselves)
+     void allocate_layout();
+diff --git a/include/pybind11/detail/internals.h b/include/pybind11/detail/internals.h
+index c1047e4a..a8448156 100644
+--- a/include/pybind11/detail/internals.h
++++ b/include/pybind11/detail/internals.h
+@@ -161,9 +161,9 @@ template <typename value_type>
+ using type_map = std::unordered_map<std::type_index, value_type, type_hash, type_equal_to>;
+ 
+ struct override_hash {
+-    inline size_t operator()(const std::pair<const PyObject *, const char *> &v) const {
++    inline size_t operator()(const std::pair<const PyObject *, std::string> &v) const {
+         size_t value = std::hash<const void *>()(v.first);
+-        value ^= std::hash<const void *>()(v.second) + 0x9e3779b9 + (value << 6) + (value >> 2);
++        value ^= std::hash<std::string>()(v.second);
+         return value;
+     }
+ };
+@@ -177,7 +177,7 @@ struct internals {
+     // PyTypeObject* -> base type_info(s)
+     std::unordered_map<PyTypeObject *, std::vector<type_info *>> registered_types_py;
+     std::unordered_multimap<const void *, instance *> registered_instances; // void * -> instance*
+-    std::unordered_set<std::pair<const PyObject *, const char *>, override_hash>
++    std::unordered_set<std::pair<const PyObject *, std::string>, override_hash>
+         inactive_override_cache;
+     type_map<std::vector<bool (*)(PyObject *, void *&)>> direct_conversions;
+     std::unordered_map<const PyObject *, std::vector<PyObject *>> patients;
+@@ -234,7 +234,7 @@ struct type_info {
+     const std::type_info *cpptype;
+     size_t type_size, type_align, holder_size_in_ptrs;
+     void *(*operator_new)(size_t);
+-    void (*init_instance)(instance *, const void *);
++    void (*init_instance)(instance *, holder_erased);
+     void (*dealloc)(value_and_holder &v_h);
+     std::vector<PyObject *(*) (PyObject *, PyTypeObject *)> implicit_conversions;
+     std::vector<std::pair<const std::type_info *, void *(*) (void *)>> implicit_casts;
+@@ -253,6 +253,10 @@ struct type_info {
+     bool default_holder : 1;
+     /* true if this is a type registered with py::module_local */
+     bool module_local : 1;
++
++#if DRAKE_HOLDER
++    instance::type_release_info_t release_info;
++#endif  // DRAKE_HOLDER
+ };
+ 
+ /// On MSVC, debug and release builds are not ABI-compatible!
+diff --git a/include/pybind11/detail/type_caster_base.h b/include/pybind11/detail/type_caster_base.h
+index 518d3107..a6cfb033 100644
+--- a/include/pybind11/detail/type_caster_base.h
++++ b/include/pybind11/detail/type_caster_base.h
+@@ -195,14 +195,18 @@ inline const std::vector<detail::type_info *> &all_type_info(PyTypeObject *type)
+  * ancestors are pybind11-registered.  Throws an exception if there are multiple bases--use
+  * `all_type_info` instead if you want to support multiple bases.
+  */
+-PYBIND11_NOINLINE detail::type_info *get_type_info(PyTypeObject *type) {
++PYBIND11_NOINLINE detail::type_info *get_type_info(PyTypeObject *type, bool do_throw = true) {
+     const auto &bases = all_type_info(type);
+     if (bases.empty()) {
+         return nullptr;
+     }
+     if (bases.size() > 1) {
+-        pybind11_fail(
+-            "pybind11::detail::get_type_info: type has multiple pybind11-registered bases");
++        if (do_throw) {
++            pybind11_fail(
++                "pybind11::detail::get_type_info: type has multiple pybind11-registered bases");
++        } else {
++            return nullptr;
++        }
+     }
+     return bases.front();
+ }
+@@ -252,12 +256,77 @@ PYBIND11_NOINLINE handle get_type_handle(const std::type_info &tp, bool throw_if
+ 
+ // Searches the inheritance graph for a registered Python instance, using all_type_info().
+ PYBIND11_NOINLINE handle find_registered_python_instance(void *src,
+-                                                         const detail::type_info *tinfo) {
++                                                         const detail::type_info *tinfo,
++                                                         bool should_take_ownership,
++                                                         holder_erased existing_holder) {
++#if DRAKE_HOLDER
++    // We only come across `!existing_holder` if we are coming from `cast` and not `cast_holder`.
++    const bool is_bare_ptr
++        = !existing_holder.ptr() && existing_holder.type_id() == HolderTypeId::Unknown;
++#endif  // DRAKE_HOLDER
++
+     auto it_instances = get_internals().registered_instances.equal_range(src);
+     for (auto it_i = it_instances.first; it_i != it_instances.second; ++it_i) {
+         for (auto *instance_type : detail::all_type_info(Py_TYPE(it_i->second))) {
+             if (instance_type && same_type(*instance_type->cpptype, *tinfo->cpptype)) {
+-                return handle((PyObject *) it_i->second).inc_ref();
++#if DRAKE_HOLDER
++                instance *const inst = it_i->second;
++
++                bool try_to_reclaim = false;
++                if (!is_bare_ptr) {
++                    switch (instance_type->release_info.holder_type_id) {
++                        case detail::HolderTypeId::UniquePtr: {
++                            try_to_reclaim = should_take_ownership;
++                            break;
++                        }
++                        case detail::HolderTypeId::SharedPtr: {
++                            if (should_take_ownership) {
++                                // Only try to reclaim the object if (a) it is not owned and (b)
++                                // has no holder.
++                                if (!inst->simple_holder_constructed) {
++                                    if (inst->owned)
++                                        throw std::runtime_error("Internal error?");
++                                    try_to_reclaim = true;
++                                }
++                            }
++                            break;
++                        }
++                        default: {
++                            // Otherwise, do not try any reclaiming.
++                            break;
++                        }
++                    }
++                }
++                if (try_to_reclaim) {
++                    // If this object has already been registered, but we wish to take ownership of
++                    // it, then use the `has_cpp_release` mechanisms to reclaim ownership.
++                    // @note This should be the sole occurrence of this registered object when
++                    // releasing back.
++                    // @note This code path should not be invoked for pure C++
++
++                    // TODO(eric.cousineau): This may be still be desirable if this is a raw
++                    // pointer... Need to think of a desirable workflow - and if there is possible
++                    // interop.
++                    if (!existing_holder) {
++                        throw std::runtime_error("Internal error: Should have non-null holder.");
++                    }
++                    // TODO(eric.cousineau): This field may not be necessary if the lowest-level
++                    // type is valid. See `move_only_holder_caster::load_value`.
++                    if (!inst->reclaim_from_cpp) {
++                        throw std::runtime_error("Instance is registered but does not have a "
++                                                 "registered reclaim method. Internal error?");
++                    }
++                    return inst->reclaim_from_cpp(inst, existing_holder).release();
++                }
++                else
++#endif  // DRAKE_HOLDER
++                {
++                    // TODO(eric.cousineau): Should really check that ownership is consistent.
++                    // e.g. if we say to take ownership of a pointer that is passed, does not have
++                    // a holder... In the end, pybind11 would let ownership slip, and leak memory,
++                    // possibly violating RAII (if someone is using that...)
++                    return handle((PyObject *) it_i->second).inc_ref();
++                }
+             }
+         }
+     }
+@@ -293,6 +362,7 @@ struct value_and_holder {
+     H &holder() const {
+         return reinterpret_cast<H &>(vh[1]);
+     }
++    void *holder_ptr() const { return &vh[1]; }
+     bool holder_constructed() const {
+         return inst->simple_layout
+                    ? inst->simple_holder_constructed
+@@ -532,6 +602,77 @@ inline PyThreadState *get_thread_state_unchecked() {
+ void keep_alive_impl(handle nurse, handle patient);
+ inline PyObject *make_new_instance(PyTypeObject *type);
+ 
++enum class LoadType {
++    PureCpp,
++    DerivedCppSinglePySingle,
++    DerivedCppSinglePyMulti,
++    DerivedCppMulti,
++    /// Polymorphic casting or copy-based casting may be necessary.
++    ConversionNeeded,
++};
++
++typedef type_info *base_ptr_t;
++using bases_t = const std::vector<base_ptr_t>;
++
++inline LoadType determine_load_type(handle src,
++                                    const type_info *typeinfo,
++                                    const bases_t **out_bases = nullptr,
++                                    base_ptr_t *out_base = nullptr) {
++    // Null out inputs.
++    if (out_bases)
++        *out_bases = nullptr;
++    if (out_base)
++        *out_base = nullptr;
++    PyTypeObject *srctype = Py_TYPE(src.ptr());
++    // See `type_caster_generic::load_impl` below for more detail on comments.
++
++    // Case 1: If src is an exact type match for the target type then we can reinterpret_cast
++    // the instance's value pointer to the target type:
++    if (srctype == typeinfo->type) {
++        // TODO(eric.cousineau): Determine if the type is upcast from a type, which is
++        // still a pure C++ object?
++        return LoadType::PureCpp;
++    }
++    // Case 2: We have a derived class
++    else if (PyType_IsSubtype(srctype, typeinfo->type)) {
++        const bases_t &bases = all_type_info(srctype);
++        if (out_bases)
++            *out_bases = &bases; // Copy to output for caching.
++        const bool no_cpp_mi = typeinfo->simple_type;
++        // Case 2a: the python type is a Python-inherited derived class that inherits from just
++        // one simple (no MI) pybind11 class, or is an exact match, so the C++ instance is of
++        // the right type and we can use reinterpret_cast.
++        // (This is essentially the same as case 2b, but because not using multiple inheritance
++        // is extremely common, we handle it specially to avoid the loop iterator and type
++        // pointer lookup overhead)
++        // TODO(eric.cousineau): This seems to also capture C++-registered classes as well, not
++        // just Python-derived classes.
++        if (bases.size() == 1 && (no_cpp_mi || bases.front()->type == typeinfo->type)) {
++            return LoadType::DerivedCppSinglePySingle;
++        }
++        // Case 2b: the python type inherits from multiple C++ bases.  Check the bases to see if
++        // we can find an exact match (or, for a simple C++ type, an inherited match); if so, we
++        // can safely reinterpret_cast to the relevant pointer.
++        else if (bases.size() > 1) {
++            for (auto base : bases) {
++                if (no_cpp_mi ? PyType_IsSubtype(base->type, typeinfo->type)
++                              : base->type == typeinfo->type) {
++                    if (out_base) {
++                        *out_base = base;
++                    }
++                    return LoadType::DerivedCppSinglePyMulti;
++                }
++            }
++        }
++        // Case 2c: C++ multiple inheritance is involved and we couldn't find an exact type match
++        // in the registered bases, above, so try implicit casting (needed for proper C++ casting
++        // when MI is involved).
++        return LoadType::DerivedCppMulti;
++    } else {
++        return LoadType::ConversionNeeded;
++    }
++}
++
+ class type_caster_generic {
+ public:
+     PYBIND11_NOINLINE explicit type_caster_generic(const std::type_info &type_info)
+@@ -548,7 +689,7 @@ public:
+                                          const detail::type_info *tinfo,
+                                          void *(*copy_constructor)(const void *),
+                                          void *(*move_constructor)(const void *),
+-                                         const void *existing_holder = nullptr) {
++                                         holder_erased existing_holder = {}) {
+         if (!tinfo) { // no type info: error will be set already
+             return handle();
+         }
+@@ -558,7 +699,11 @@ public:
+             return none().release();
+         }
+ 
+-        if (handle registered_inst = find_registered_python_instance(src, tinfo)) {
++        const bool should_take_ownership = policy == return_value_policy::automatic
++                                           || policy == return_value_policy::take_ownership;
++
++        if (handle registered_inst = find_registered_python_instance(
++                src, tinfo, should_take_ownership, existing_holder)) {
+             return registered_inst;
+         }
+ 
+@@ -629,13 +774,14 @@ public:
+                 throw cast_error("unhandled return_value_policy: should not happen!");
+         }
+ 
++        // TODO(eric.cousineau): Propagate `holder_erased` through this chain.
+         tinfo->init_instance(wrapper, existing_holder);
+ 
+         return inst.release();
+     }
+ 
+     // Base methods for generic caster; there are overridden in copyable_holder_caster
+-    void load_value(value_and_holder &&v_h) {
++    void load_value(value_and_holder &&v_h, LoadType) {
+         auto *&vptr = v_h.value_ptr();
+         // Lazy allocation for unallocated values:
+         if (vptr == nullptr) {
+@@ -723,52 +869,37 @@ public:
+         auto &this_ = static_cast<ThisT &>(*this);
+         this_.check_holder_compat();
+ 
+-        PyTypeObject *srctype = Py_TYPE(src.ptr());
+-
+-        // Case 1: If src is an exact type match for the target type then we can reinterpret_cast
+-        // the instance's value pointer to the target type:
+-        if (srctype == typeinfo->type) {
+-            this_.load_value(reinterpret_cast<instance *>(src.ptr())->get_value_and_holder());
+-            return true;
+-        }
+-        // Case 2: We have a derived class
+-        if (PyType_IsSubtype(srctype, typeinfo->type)) {
+-            const auto &bases = all_type_info(srctype);
+-            bool no_cpp_mi = typeinfo->simple_type;
+-
+-            // Case 2a: the python type is a Python-inherited derived class that inherits from just
+-            // one simple (no MI) pybind11 class, or is an exact match, so the C++ instance is of
+-            // the right type and we can use reinterpret_cast.
+-            // (This is essentially the same as case 2b, but because not using multiple inheritance
+-            // is extremely common, we handle it specially to avoid the loop iterator and type
+-            // pointer lookup overhead)
+-            if (bases.size() == 1 && (no_cpp_mi || bases.front()->type == typeinfo->type)) {
+-                this_.load_value(reinterpret_cast<instance *>(src.ptr())->get_value_and_holder());
++        const bases_t *bases = nullptr;
++        base_ptr_t base_py_multi = nullptr;
++        LoadType load_type = determine_load_type(src, typeinfo, &bases, &base_py_multi);
++        switch (load_type) {
++            case LoadType::PureCpp: {
++                this_.load_value(reinterpret_cast<instance *>(src.ptr())->get_value_and_holder(),
++                                 load_type);
+                 return true;
+             }
+-            // Case 2b: the python type inherits from multiple C++ bases.  Check the bases to see
+-            // if we can find an exact match (or, for a simple C++ type, an inherited match); if
+-            // so, we can safely reinterpret_cast to the relevant pointer.
+-            if (bases.size() > 1) {
+-                for (auto *base : bases) {
+-                    if (no_cpp_mi ? PyType_IsSubtype(base->type, typeinfo->type)
+-                                  : base->type == typeinfo->type) {
+-                        this_.load_value(
+-                            reinterpret_cast<instance *>(src.ptr())->get_value_and_holder(base));
+-                        return true;
+-                    }
+-                }
++            case LoadType::DerivedCppSinglePySingle: {
++                this_.load_value(reinterpret_cast<instance *>(src.ptr())->get_value_and_holder(),
++                                 load_type);
++                return true;
+             }
+-
+-            // Case 2c: C++ multiple inheritance is involved and we couldn't find an exact type
+-            // match in the registered bases, above, so try implicit casting (needed for proper C++
+-            // casting when MI is involved).
+-            if (this_.try_implicit_casts(src, convert)) {
++            case LoadType::DerivedCppSinglePyMulti: {
++                this_.load_value(
++                    reinterpret_cast<instance *>(src.ptr())->get_value_and_holder(base_py_multi),
++                    load_type);
+                 return true;
+             }
++            case LoadType::DerivedCppMulti: {
++                if (this_.try_implicit_casts(src, convert))
++                    return true;
++                break;
++            }
++            case LoadType::ConversionNeeded: {
++                break;
++            }
+         }
+ 
+-        // Perform an implicit conversion
++        // If nothing else succeeds, perform an implicit conversion
+         if (convert) {
+             for (const auto &converter : typeinfo->implicit_conversions) {
+                 auto temp = reinterpret_steal<object>(converter(src.ptr(), typeinfo->type));
+@@ -1153,8 +1284,11 @@ public:
+                                          make_move_constructor(src));
+     }
+ 
+-    static handle cast_holder(const itype *src, const void *holder) {
++    static handle cast_holder(const itype *src, holder_erased holder) {
+         auto st = src_and_type(src);
++        if (!holder) {
++            throw std::runtime_error("Internal error: Should not have null holder");
++        }
+         return type_caster_generic::cast(st.first,
+                                          return_value_policy::take_ownership,
+                                          {},
+diff --git a/include/pybind11/eigen/matrix.h b/include/pybind11/eigen/matrix.h
+index 8d4342f8..c5fcd67a 100644
+--- a/include/pybind11/eigen/matrix.h
++++ b/include/pybind11/eigen/matrix.h
+@@ -136,6 +136,10 @@ struct eigen_extract_stride<Eigen::Ref<PlainObjectType, Options, StrideType>> {
+     using type = StrideType;
+ };
+ 
++template <typename Scalar>
++using is_pyobject_dtype
++    = std::is_base_of<npy_format_descriptor<PyObject*>, npy_format_descriptor<Scalar>>;
++
+ // Helper struct for extracting information from an Eigen type
+ template <typename Type_>
+ struct EigenProps {
+@@ -175,11 +179,15 @@ struct EigenProps {
+             return false;
+         }
+ 
++        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
++        ssize_t scalar_size = (is_pyobject ? static_cast<ssize_t>(sizeof(PyObject *))
++                                           : static_cast<ssize_t>(sizeof(Scalar)));
++
+         if (dims == 2) { // Matrix type: require exact match (or dynamic)
+ 
+             EigenIndex np_rows = a.shape(0), np_cols = a.shape(1),
+-                       np_rstride = a.strides(0) / static_cast<ssize_t>(sizeof(Scalar)),
+-                       np_cstride = a.strides(1) / static_cast<ssize_t>(sizeof(Scalar));
++                       np_rstride = a.strides(0) / scalar_size,
++                       np_cstride = a.strides(1) / scalar_size;
+             if ((fixed_rows && np_rows != rows) || (fixed_cols && np_cols != cols)) {
+                 return false;
+             }
+@@ -189,8 +197,7 @@ struct EigenProps {
+ 
+         // Otherwise we're storing an n-vector.  Only one of the strides will be used, but
+         // whichever is used, we want the (single) numpy stride value.
+-        const EigenIndex n = a.shape(0),
+-                         stride = a.strides(0) / static_cast<ssize_t>(sizeof(Scalar));
++        const EigenIndex n = a.shape(0), stride = a.strides(0) / scalar_size;
+ 
+         if (vector) { // Eigen type is a compile-time vector
+             if (fixed && size != n) {
+@@ -246,13 +253,68 @@ handle
+ eigen_array_cast(typename props::Type const &src, handle base = handle(), bool writeable = true) {
+     constexpr ssize_t elem_size = sizeof(typename props::Scalar);
+     array a;
+-    if (props::vector) {
+-        a = array({src.size()}, {elem_size * src.innerStride()}, src.data(), base);
++    using Scalar = typename props::Type::Scalar;
++    bool is_pyobject
++        = static_cast<pybind11::detail::npy_api::constants>(npy_format_descriptor<Scalar>::value)
++          == npy_api::NPY_OBJECT_;
++
++    if (!is_pyobject) {
++        if (props::vector) {
++            a = array({src.size()}, {elem_size * src.innerStride()}, src.data(), base);
++        } else {
++            a = array({src.rows(), src.cols()},
++                      {elem_size * src.rowStride(), elem_size * src.colStride()},
++                      src.data(),
++                      base);
++        }
+     } else {
+-        a = array({src.rows(), src.cols()},
+-                  {elem_size * src.rowStride(), elem_size * src.colStride()},
+-                  src.data(),
+-                  base);
++        if (base) {
++            // Should be disabled by upstream calls to this method.
++            // TODO(eric.cousineau): Write tests to ensure that this is not
++            // reachable.
++            throw cast_error("dtype=object does not permit array referencing. "
++                             "(NOTE: this generally not be reachable, as upstream APIs "
++                             "should fail before this.");
++        }
++        handle empty_base{};
++        auto policy = return_value_policy::copy;
++        if (props::vector) {
++            a = array(npy_format_descriptor<Scalar>::dtype(),
++                      {(size_t) src.size()},
++                      nullptr,
++                      empty_base);
++            auto _m_arr = a.mutable_unchecked<object, 1>();
++
++            constexpr bool is_row = props::fixed_rows && props::rows == 1;
++            for (ssize_t i = 0; i < src.size(); ++i) {
++                const Scalar src_val = is_row ? src(0, i) : src(i, 0);
++                auto value_ = reinterpret_steal<object>(
++                    make_caster<Scalar>::cast(src_val, policy, empty_base));
++                if (!value_) {
++                    return handle();
++                }
++
++                _m_arr[i] = value_;
++            }
++        } else {
++            a = array(npy_format_descriptor<Scalar>::dtype(),
++                      {(size_t) src.rows(), (size_t) src.cols()},
++                      nullptr,
++                      empty_base);
++            auto _m_arr = a.mutable_unchecked<object, 2>();
++
++            for (ssize_t i = 0; i < src.rows(); ++i) {
++                for (ssize_t j = 0; j < src.cols(); ++j) {
++                    auto value_ = reinterpret_steal<object>(
++                        make_caster<Scalar>::cast(src(i, j), policy, empty_base));
++                    if (!value_) {
++                        return handle();
++                    }
++
++                    _m_arr(i,j) = value_;
++                }
++            }
++        }
+     }
+ 
+     if (!writeable) {
+@@ -314,17 +376,53 @@ struct type_caster<Type, enable_if_t<is_eigen_dense_plain<Type>::value>> {
+         if (!fits) {
+             return false;
+         }
++        int result = 0;
+ 
+         // Allocate the new type, then build a numpy reference into it
+         value = Type(fits.rows, fits.cols);
+-        auto ref = reinterpret_steal<array>(eigen_ref_array<props>(value));
+-        if (dims == 1) {
+-            ref = ref.squeeze();
+-        } else if (ref.ndim() == 1) {
+-            buf = buf.squeeze();
+-        }
++        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
++
++        if (!is_pyobject) {
++            auto ref = reinterpret_steal<array>(eigen_ref_array<props>(value));
++            if (dims == 1) {
++                ref = ref.squeeze();
++            } else if (ref.ndim() == 1) {
++                buf = buf.squeeze();
++            }
++            result = detail::npy_api::get().PyArray_CopyInto_(ref.ptr(), buf.ptr());
++        } else {
++            if (dims == 1) {
++                if (Type::RowsAtCompileTime == Eigen::Dynamic) {
++                    value.resize(buf.shape(0), 1);
++                } else if (Type::ColsAtCompileTime == Eigen::Dynamic) {
++                    value.resize(1, buf.shape(0));
++                }
+ 
+-        int result = detail::npy_api::get().PyArray_CopyInto_(ref.ptr(), buf.ptr());
++                for (ssize_t i = 0; i < buf.shape(0); ++i) {
++                    make_caster<Scalar> conv_val;
++                    if (!conv_val.load(buf.attr("item")(i).cast<pybind11::object>(), convert)) {
++                        return false;
++                    }
++                    value(i) = cast_op<Scalar>(conv_val);
++                }
++            } else {
++                if (Type::RowsAtCompileTime == Eigen::Dynamic
++                    || Type::ColsAtCompileTime == Eigen::Dynamic) {
++                    value.resize(buf.shape(0), buf.shape(1));
++                }
++                for (ssize_t i = 0; i < buf.shape(0); ++i) {
++                    for (ssize_t j = 0; j < buf.shape(1); ++j) {
++                        // p is the const void pointer to the item
++                        make_caster<Scalar> conv_val;
++                        if (!conv_val.load(buf.attr("item")(i, j).cast<pybind11::object>(),
++                                           convert)) {
++                            return false;
++                        }
++                        value(i, j) = cast_op<Scalar>(conv_val);
++                    }
++                }
++            }
++        }
+ 
+         if (result < 0) { // Copy failed!
+             PyErr_Clear();
+@@ -338,22 +436,42 @@ private:
+     // Cast implementation
+     template <typename CType>
+     static handle cast_impl(CType *src, return_value_policy policy, handle parent) {
+-        switch (policy) {
+-            case return_value_policy::take_ownership:
+-            case return_value_policy::automatic:
+-                return eigen_encapsulate<props>(src);
+-            case return_value_policy::move:
+-                return eigen_encapsulate<props>(new CType(std::move(*src)));
+-            case return_value_policy::copy:
+-                return eigen_array_cast<props>(*src);
+-            case return_value_policy::reference:
+-            case return_value_policy::automatic_reference:
+-                return eigen_ref_array<props>(*src);
+-            case return_value_policy::reference_internal:
+-                return eigen_ref_array<props>(*src, parent);
+-            default:
+-                throw cast_error("unhandled return_value_policy: should not happen!");
+-        };
++        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
++        if (!is_pyobject) {
++            switch (policy) {
++                case return_value_policy::take_ownership:
++                case return_value_policy::automatic:
++                    return eigen_encapsulate<props>(src);
++                case return_value_policy::move:
++                    return eigen_encapsulate<props>(new CType(std::move(*src)));
++                case return_value_policy::copy:
++                    return eigen_array_cast<props>(*src);
++                case return_value_policy::reference:
++                case return_value_policy::automatic_reference:
++                    return eigen_ref_array<props>(*src);
++                case return_value_policy::reference_internal:
++                    return eigen_ref_array<props>(*src, parent);
++                default:
++                    throw cast_error("unhandled return_value_policy: should not happen!");
++            };
++        } else {
++            // For arrays of `dtype=object`, referencing is invalid, so we should squash that as
++            // soon as possible.
++            switch (policy) {
++                case return_value_policy::automatic:
++                case return_value_policy::move:
++                case return_value_policy::copy:
++                case return_value_policy::automatic_reference:
++                    return eigen_array_cast<props>(*src);
++                case return_value_policy::take_ownership:
++                case return_value_policy::reference:
++                case return_value_policy::reference_internal:
++                    throw cast_error(
++                        "dtype=object arrays must be copied, and cannot be referenced");
++                default:
++                    throw cast_error("unhandled return_value_policy: should not happen!");
++            };
++        }
+     }
+ 
+ public:
+@@ -413,6 +531,7 @@ struct eigen_map_caster {
+ 
+ private:
+     using props = EigenProps<MapType>;
++    using Scalar = typename props::Scalar;
+ 
+ public:
+     // Directly referencing a ref/map's data is a bit dangerous (whatever the map/ref points to has
+@@ -422,18 +541,36 @@ public:
+     // Note that this means you need to ensure you don't destroy the object in some other way (e.g.
+     // with an appropriate keep_alive, or with a reference to a statically allocated matrix).
+     static handle cast(const MapType &src, return_value_policy policy, handle parent) {
+-        switch (policy) {
+-            case return_value_policy::copy:
+-                return eigen_array_cast<props>(src);
+-            case return_value_policy::reference_internal:
+-                return eigen_array_cast<props>(src, parent, is_eigen_mutable_map<MapType>::value);
+-            case return_value_policy::reference:
+-            case return_value_policy::automatic:
+-            case return_value_policy::automatic_reference:
+-                return eigen_array_cast<props>(src, none(), is_eigen_mutable_map<MapType>::value);
+-            default:
+-                // move, take_ownership don't make any sense for a ref/map:
+-                pybind11_fail("Invalid return_value_policy for Eigen Map/Ref/Block type");
++        if (!is_pyobject_dtype<Scalar>::value) {
++            switch (policy) {
++                case return_value_policy::copy:
++                    return eigen_array_cast<props>(src);
++                case return_value_policy::reference_internal:
++                    return eigen_array_cast<props>(
++                        src, parent, is_eigen_mutable_map<MapType>::value);
++                case return_value_policy::reference:
++                case return_value_policy::automatic:
++                case return_value_policy::automatic_reference:
++                    return eigen_array_cast<props>(
++                        src, none(), is_eigen_mutable_map<MapType>::value);
++                default:
++                    // move, take_ownership don't make any sense for a ref/map:
++                    pybind11_fail("Invalid return_value_policy for Eigen Map/Ref/Block type");
++            }
++        } else {
++            switch (policy) {
++                case return_value_policy::copy:
++                    return eigen_array_cast<props>(src);
++                case return_value_policy::reference_internal:
++                case return_value_policy::reference:
++                case return_value_policy::automatic:
++                case return_value_policy::automatic_reference:
++                    throw cast_error(
++                        "dtype=object arrays must be copied, and cannot be referenced");
++                default:
++                    // move, take_ownership don't make any sense for a ref/map:
++                    pybind11_fail("Invalid return_value_policy for Eigen Map/Ref/Block type");
++            }
+         }
+     }
+ 
+@@ -485,6 +622,7 @@ private:
+     // conversion and storage order conversion.  (Note that we refuse to use this temporary copy
+     // when loading an argument for a Ref<M> with M non-const, i.e. a read-write reference).
+     Array copy_or_ref;
++    typename std::remove_cv<PlainObjectType>::type val;
+ 
+ public:
+     bool load(handle src, bool convert) {
+@@ -493,6 +631,17 @@ public:
+         bool need_copy = !isinstance<Array>(src);
+ 
+         EigenConformable<props::row_major> fits;
++        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
++        // TODO(eric.cousineau): Make this compile-time once Drake does not use this in any code
++        // for scalar types.
++        // static_assert(!(is_pyobject && need_writeable), "dtype=object cannot provide writeable
++        // references");
++        if (is_pyobject && need_writeable) {
++            throw cast_error("dtype=object cannot provide writeable references");
++        }
++        if (is_pyobject) {
++            need_copy = true;
++        }
+         if (!need_copy) {
+             // We don't need a converting copy, but we also need to check whether the strides are
+             // compatible with the Ref's stride requirements
+@@ -517,7 +666,7 @@ public:
+             // We need to copy: If we need a mutable reference, or we're not supposed to convert
+             // (either because we're in the no-convert overload pass, or because we're explicitly
+             // instructed not to copy (via `py::arg().noconvert()`) we have to fail loading.
+-            if (!convert || need_writeable) {
++            if (!is_pyobject && (!convert || need_writeable)) {
+                 return false;
+             }
+ 
+@@ -529,8 +678,46 @@ public:
+             if (!fits || !fits.template stride_compatible<props>()) {
+                 return false;
+             }
+-            copy_or_ref = std::move(copy);
+-            loader_life_support::add_patient(copy_or_ref);
++
++            if (!is_pyobject) {
++                copy_or_ref = std::move(copy);
++                loader_life_support::add_patient(copy_or_ref);
++            } else {
++                auto dims = copy.ndim();
++                if (dims == 1) {
++                    if (Type::RowsAtCompileTime == Eigen::Dynamic
++                        || Type::ColsAtCompileTime == Eigen::Dynamic) {
++                        val.resize(copy.shape(0), 1);
++                    }
++                    for (ssize_t i = 0; i < copy.shape(0); ++i) {
++                        make_caster<Scalar> conv_val;
++                        if (!conv_val.load(copy.attr("item")(i).template cast<pybind11::object>(),
++                                           convert)) {
++                            return false;
++                        }
++                        val(i) = cast_op<Scalar>(conv_val);
++                    }
++                } else {
++                    if (Type::RowsAtCompileTime == Eigen::Dynamic
++                        || Type::ColsAtCompileTime == Eigen::Dynamic) {
++                        val.resize(copy.shape(0), copy.shape(1));
++                    }
++                    for (ssize_t i = 0; i < copy.shape(0); ++i) {
++                        for (ssize_t j = 0; j < copy.shape(1); ++j) {
++                            // p is the const void pointer to the item
++                            make_caster<Scalar> conv_val;
++                            if (!conv_val.load(
++                                    copy.attr("item")(i, j).template cast<pybind11::object>(),
++                                    convert)) {
++                                return false;
++                            }
++                            val(i, j) = cast_op<Scalar>(conv_val);
++                        }
++                    }
++                }
++                ref.reset(new Type(val));
++                return true;
++            }
+         }
+ 
+         ref.reset();
+@@ -649,16 +836,26 @@ struct type_caster<Type, enable_if_t<is_eigen_sparse<Type>::value>> {
+     using Index = typename Type::Index;
+     static constexpr bool rowMajor = Type::IsRowMajor;
+ 
+-    bool load(handle src, bool) {
++    bool load(handle src, bool convert) {
+         if (!src) {
+             return false;
+         }
+ 
+         auto obj = reinterpret_borrow<object>(src);
+-        object sparse_module = module_::import("scipy.sparse");
++        object sparse_module;
++        try {
++            sparse_module = module_::import("scipy.sparse");
++        } catch (const error_already_set &) {
++            // As a Drake-specific amendment, we skip Eigen::Sparse overloads
++            // when scipy is not available, instead of raising an import error.
++            return false;
++        }
+         object matrix_type = sparse_module.attr(rowMajor ? "csr_matrix" : "csc_matrix");
+ 
+         if (!type::handle_of(obj).is(matrix_type)) {
++            if (!convert) {
++                return false;
++            }
+             try {
+                 obj = matrix_type(obj);
+             } catch (const error_already_set &) {
+diff --git a/include/pybind11/pybind11.h b/include/pybind11/pybind11.h
+index 429d2138..0a75ea6e 100644
+--- a/include/pybind11/pybind11.h
++++ b/include/pybind11/pybind11.h
+@@ -121,6 +121,10 @@ inline bool apply_exception_translators(std::forward_list<ExceptionTranslator> &
+ 
+ PYBIND11_NAMESPACE_END(detail)
+ 
++// TODO(eric.cousineau): Move into detail namespace.
++template <typename... Args>
++void unused(Args &&...) {}
++
+ /// Wraps an arbitrary C++ function/method/lambda function/.. into a callable Python object
+ class cpp_function : public function {
+ public:
+@@ -1391,6 +1395,10 @@ protected:
+         tinfo->default_holder = rec.default_holder;
+         tinfo->module_local = rec.module_local;
+ 
++#if DRAKE_HOLDER
++        tinfo->release_info = rec.release_info;
++#endif  // DRAKE_HOLDER
++
+         auto &internals = get_internals();
+         auto tindex = std::type_index(*rec.type);
+         tinfo->direct_conversions = &internals.direct_conversions[tindex];
+@@ -1551,6 +1559,165 @@ auto method_adaptor(Return (Class::*pmf)(Args...) const) -> Return (Derived::*)(
+     return pmf;
+ }
+ 
++namespace detail {
++
++template <template <typename...> class Tpl>
++struct is_base_template_of_impl {
++    // Use pointers for robustness.
++    template <typename... Base>
++    static std::true_type check(const Tpl<Base...> *);
++    static std::false_type check(void *);
++};
++
++template <template <typename...> class Tpl, typename Derived>
++using is_base_template_of
++    = decltype(is_base_template_of_impl<Tpl>::check(std::declval<Derived *>()));
++
++#if DRAKE_HOLDER
++template <typename type, typename alias, bool compatible>
++struct wrapper_interface_impl {
++    static void use_cpp_lifetime(type *cppobj, object &&obj, detail::HolderTypeId holder_type_id) {
++        auto *tr = dynamic_cast<alias *>(cppobj);
++        if (tr == nullptr) {
++            // This has been invoked at too high of a level; should use a
++            // downcast class's `release_to_cpp` mechanism (if it supports it).
++            throw std::runtime_error(
++                "Attempting to release to C++ using pybind11::wrapper<> "
++                "at too high of a level. Use a class type lower in the hierarchy, such that "
++                "the Python-derived instance actually is part of the lineage of "
++                "pybind11::wrapper<downcast_type>");
++        }
++        // Let the external holder take ownership, but keep instance registered.
++        tr->use_cpp_lifetime(std::move(obj), holder_type_id);
++    }
++
++    static object release_cpp_lifetime(type *cppobj) {
++        auto *tr = dynamic_cast<alias *>(cppobj);
++        if (tr == nullptr) {
++            // This shouldn't happen here...
++            throw std::runtime_error("Internal error?");
++        }
++        // Return newly created object.
++        return tr->release_cpp_lifetime();
++    }
++};
++
++template <typename type, typename alias>
++struct wrapper_interface_impl<type, alias, false> {
++    static void use_cpp_lifetime(type *, object &&, detail::HolderTypeId) {
++        // This should be captured by runtime flag.
++        // TODO(eric.cousineau): Runtime flag may not be necessary.
++        throw std::runtime_error("Internal error?");
++    }
++    static object release_cpp_lifetime(type *) { throw std::runtime_error("Internal error?"); }
++};
++
++template <detail::HolderTypeId holder_type_id = detail::HolderTypeId::Unknown>
++struct holder_check_impl {
++    template <typename holder_type>
++    static bool check_destruct(...) {
++        // Noop by default.
++        return true;
++    }
++    template <typename holder_type>
++    static bool allow_null_external_holder(const holder_type &) {
++        return false;
++    }
++    template <typename holder_type>
++    static bool attempt_holder_transfer(holder_type &holder,
++                                        detail::holder_erased external_holder_raw) {
++        // Only called when holder types are different.
++        unused(holder, external_holder_raw);
++        throw std::runtime_error("Unable to transfer between holders of different types");
++    }
++    template <typename holder_type>
++    static bool accept_holder(detail::holder_erased external_holder_raw, holder_type &holder) {
++        // Only called when holder types are different.
++        unused(holder, external_holder_raw);
++        throw std::runtime_error("Unable to transfer between holders of different types");
++    }
++};
++
++template <>
++struct holder_check_impl<detail::HolderTypeId::SharedPtr>
++    : public holder_check_impl<detail::HolderTypeId::Unknown> {
++    template <typename holder_type>
++    static bool check_destruct(detail::instance *inst, detail::holder_erased holder_raw) {
++        const auto &h = holder_raw.cast<holder_type>();
++        handle src((PyObject *) inst);
++        const detail::type_info *lowest_type = get_lowest_type(src, false);
++        if (!lowest_type)
++            // We have multiple inheritance, skip.
++            return true;
++        auto load_type = detail::determine_load_type(src, lowest_type);
++        // Check use_count(), assuming that we have an accurate count (no competing threads?)
++        if (load_type == detail::LoadType::DerivedCppSinglePySingle) {
++            if (h.use_count() > 1) {
++                // Increase reference count
++                const auto &release_info = lowest_type->release_info;
++                if (release_info.can_derive_from_wrapper) {
++                    // Increase reference count
++                    object obj = reinterpret_borrow<object>(src);
++                    // Release to C++.
++                    holder_type *null_holder = nullptr;
++                    release_info.release_to_cpp(
++                        inst, detail::holder_erased(null_holder), std::move(obj));
++                    return false;
++                }
++            }
++        }
++        return true;
++    }
++
++    template <typename holder_type>
++    static bool allow_null_external_holder(const holder_type &holder) {
++        // Called by `release_to_cpp`.
++        if (holder.use_count() == 1)
++            // TODO(eric.cousineau): This may not hold true if we pass temporaries???
++            // Or if we've copied a `holder` in copyable_holder_caster...
++            throw std::runtime_error("Internal error: Should have non-null shared_ptr<> "
++                                     "external_holder if use_count() == 1");
++        else
++            return true;
++    }
++
++    template <typename holder_type>
++    static bool accept_holder(detail::holder_erased external_holder_raw, holder_type &holder) {
++        // Only accept shared_ptr from `external_holder_raw`.
++        if (external_holder_raw.type_id() == detail::HolderTypeId::UniquePtr) {
++            using T = typename holder_type::element_type;
++            auto &external_holder = external_holder_raw.mutable_cast<std::unique_ptr<T>>();
++            // Transfer to internal.
++            holder = std::move(external_holder);
++            return true;
++        } else {
++            throw std::runtime_error("Unable to transfer between holders of different types");
++        }
++    }
++};
++
++template <>
++struct holder_check_impl<detail::HolderTypeId::UniquePtr>
++    : public holder_check_impl<detail::HolderTypeId::Unknown> {
++    template <typename holder_type>
++    static bool attempt_holder_transfer(holder_type &holder,
++                                        detail::holder_erased external_holder_raw) {
++        // Only accept shared_ptr from `external_holder_raw`.
++        if (external_holder_raw.type_id() == detail::HolderTypeId::SharedPtr) {
++            using T = typename holder_type::element_type;
++            auto &external_holder = external_holder_raw.mutable_cast<std::shared_ptr<T>>();
++            // Transfer to external.
++            external_holder = std::move(holder);
++            return true;
++        } else {
++            return false;
++        }
++    }
++};
++#endif  // DRAKE_HOLDER
++
++} // namespace detail
++
+ template <typename type_, typename... options>
+ class class_ : public detail::generic_type {
+     template <typename T>
+@@ -1567,7 +1734,16 @@ public:
+     using type = type_;
+     using type_alias = detail::exactly_one_t<is_subtype, void, options...>;
+     constexpr static bool has_alias = !std::is_void<type_alias>::value;
++    constexpr static bool has_wrapper = detail::is_base_template_of<wrapper, type_alias>::value;
++#if 1  // XXX default to shared_ptr
++    using holder_type = detail::exactly_one_t<is_holder, std::shared_ptr<type>, options...>;
++#else
+     using holder_type = detail::exactly_one_t<is_holder, std::unique_ptr<type>, options...>;
++#endif
++#if DRAKE_HOLDER
++    constexpr static detail::HolderTypeId holder_type_id
++        = detail::get_holder_type_id<holder_type>::value;
++#endif  // DRAKE_HOLDER
+ 
+     static_assert(detail::all_of<is_valid_class_option<options>...>::value,
+                   "Unknown/invalid class_ template parameters provided");
+@@ -1601,6 +1777,15 @@ public:
+         record.dealloc = dealloc;
+         record.default_holder = detail::is_instantiation<std::unique_ptr, holder_type>::value;
+ 
++#if DRAKE_HOLDER
++        // TODO(eric.cousineau): Determine if it is possible to permit releasing without a
++        // wrapper...
++        auto &release_info = record.release_info;
++        release_info.can_derive_from_wrapper = has_wrapper;
++        release_info.release_to_cpp = release_to_cpp;
++        release_info.holder_type_id = holder_type_id;
++#endif  // DRAKE_HOLDER
++
+         set_operator_new<type>(&record);
+ 
+         /* Register base classes specified via template arguments to class_, if any */
+@@ -1619,6 +1804,185 @@ public:
+         }
+     }
+ 
++    static detail::type_info *get_type_info() {
++        std::type_index id(typeid(type));
++        return detail::get_type_info(id);
++    }
++
++#if DRAKE_HOLDER
++    using wrapper_interface = detail::wrapper_interface_impl<type, type_alias, has_wrapper>;
++    using holder_check = detail::holder_check_impl<holder_type_id>;
++
++    static bool allow_destruct(detail::instance *inst, detail::holder_erased holder) {
++        // TODO(eric.cousineau): There should not be a case where shared_ptr<> lives in
++        // C++ and Python, with it being owned by C++. Check this.
++        return holder_check::template check_destruct<holder_type>(inst, holder);
++    }
++
++    static void del_wrapped(handle self, object del_orig) {
++        // This should be called when the item is *actually* being deleted
++        // TODO(eric.cousineau): Do we care about use cases where the user manually calls this?
++        auto *inst = (detail::instance *) self.ptr();
++        const detail::type_info *lowest_type = detail::get_lowest_type(self, false);
++        if (!lowest_type) {
++            // This should only happen in a multi-inheritance case (which is
++            // not yet supported for this fork's ownership transfer setup).
++            return;
++        }
++        auto &release_info = lowest_type->release_info;
++        // The references are as follows:
++        //   1. When Python calls __del__ via tp_del (default slot)
++        //   2. When Python gets the instance-bound __del__ method.
++        // TODO(eric.cousineau): Confirm this ^
++        //   3. When pybind11 gets the argument
++        const int orig_count = self.ref_count();
++
++        auto v_h = inst->get_value_and_holder(lowest_type);
++        detail::holder_erased holder_raw(v_h.holder_ptr(), release_info.holder_type_id);
++
++        // TODO(eric.cousineau): Ensure that this does not prevent destruction if
++        // the Python interpreter is finalizing...
++        // Is there a way to do this without a custom handler?
++
++        // Purposely do NOT capture `object` to refcount low.
++        // TODO(eric.cousineau): `allow_destruct` should be registered in `type_info`.
++        // Right now, this doesn't really type-erase anything...
++        if (allow_destruct(inst, holder_raw)) {
++            // Call the old destructor.
++            if (!del_orig.is(none())) {
++                del_orig(self);
++            }
++        } else {
++            // This should have been kept alive by an increment in number of references.
++            unused(orig_count);
++            assert(self.ref_count() == orig_count + 1);
++        }
++    }
++
++    static void release_to_cpp(detail::instance *inst,
++                               detail::holder_erased external_holder_raw,
++                               object &&obj) {
++        using detail::LoadType;
++        auto v_h = inst->get_value_and_holder();
++        auto *tinfo = get_type_info();
++        if (!inst->owned || !v_h.holder_constructed()) {
++            throw std::runtime_error(
++                "C++ object must be owned by pybind11 when attempting to release to C++");
++        }
++        LoadType load_type = determine_load_type(obj, tinfo);
++        switch (load_type) {
++            case LoadType::PureCpp: {
++                // Given that `obj` is now exclusive, then once it goes out of scope,
++                // then the registered instance for this object should be destroyed, and this
++                // should become a pure C++ object, without any ties to `pybind11`.
++                // Also, even if this instance is of a class derived from a Base that has a
++                // wrapper-wrapper alias, we do not need to worry about not being in the correct
++                // hierarchy, since we will simply release from it.
++
++                // TODO(eric.cousineau): Presently, there is no support for a consistent use of
++                // weak references. If a PureCpp object is released from Python, then all weak
++                // references are invalidated, even if it comes back... Ideally, this could check
++                // if there are weak references. But to whom should the lifetime be extended?
++                // Perhaps the first weak reference that is available?
++                break;
++            }
++            case LoadType::DerivedCppSinglePySingle: {
++                if (!tinfo->release_info.can_derive_from_wrapper) {
++                    // This could be relaxed if there is an optional `release` mechanism for
++                    // holders. However, there is still slicing.
++                    throw std::runtime_error(
++                        "Python-extended C++ class does not inherit from pybind11::wrapper<>, "
++                        "and the instance will be sliced. Either avoid this situation, or "
++                        "the type extends pybind11::wrapper<>.");
++                }
++                auto *cppobj = reinterpret_cast<type *>(v_h.value_ptr());
++                wrapper_interface::use_cpp_lifetime(cppobj, std::move(obj), holder_type_id);
++                break;
++            }
++            default: {
++                throw std::runtime_error("Unsupported load type (multiple inheritance)");
++            }
++        }
++        bool transfer_holder = true;
++        auto &holder = v_h.holder<holder_type>();
++        if (!external_holder_raw.ptr()) {
++            if (holder_check::allow_null_external_holder(holder))
++                transfer_holder = false;
++            else
++                throw std::runtime_error("Internal error: Null external holder");
++        }
++        if (transfer_holder) {
++            if (external_holder_raw.type_id() == holder_type_id) {
++                auto &external_holder = external_holder_raw.mutable_cast<holder_type>();
++                external_holder = std::move(holder);
++            } else {
++                // Only allow unique_ptr<> -> shared_ptr<>
++                holder_check::attempt_holder_transfer(holder, external_holder_raw);
++            }
++        }
++        holder.~holder_type();
++        v_h.set_holder_constructed(false);
++        inst->owned = false;
++        // Register this type's reclamation procedure, since it's wrapper may have the contained
++        // object.
++        inst->reclaim_from_cpp = reclaim_from_cpp;
++    }
++
++    static object reclaim_from_cpp(detail::instance *inst,
++                                   detail::holder_erased external_holder_raw) {
++        using detail::LoadType;
++        auto v_h = inst->get_value_and_holder();
++        auto *tinfo = get_type_info();
++        // TODO(eric.cousineau): Should relax this to not require a holder be constructed,
++        // only that the holder itself be default (unique_ptr<>).
++        if (inst->owned) {
++            throw std::runtime_error(
++                "reclaim_from_cpp: Python object already owned! Did you forget to explicitly use "
++                "a "
++                "py::return_value_policy (e.g. reference or reference internal) when passing back "
++                "non-owned pointers of the C++ object?");
++        }
++        if (v_h.holder_constructed()) {
++            throw std::runtime_error("reclaim_from_cpp: Holder already exists - internal error?");
++        }
++        if (!external_holder_raw) {
++            throw std::runtime_error("reclaim_from_cpp: No external holder - internal error?");
++        }
++        // Is this valid?
++        handle h(reinterpret_cast<PyObject *>(inst));
++        LoadType load_type = determine_load_type(h, tinfo);
++        {
++            // TODO(eric.cousineau): Consider releasing a raw pointer, to make it easier for
++            // interop with purely raw pointers? Nah, just rely on release.
++            auto &holder = v_h.holder<holder_type>();
++            auto &external_holder = external_holder_raw.mutable_cast<holder_type>();
++            new (&holder) holder_type(std::move(external_holder));
++            v_h.set_holder_constructed(true);
++
++            // Show that it has been reclaimed.
++            inst->reclaim_from_cpp = nullptr;
++        }
++        object obj;
++        switch (load_type) {
++            case LoadType::PureCpp: {
++                // Nothing complex needed here.
++                obj = reinterpret_borrow<object>(h);
++                break;
++            }
++            case LoadType::DerivedCppSinglePySingle: {
++                auto *cppobj = reinterpret_cast<type *>(v_h.value_ptr());
++                obj = wrapper_interface::release_cpp_lifetime(cppobj);
++                break;
++            }
++            default: {
++                throw std::runtime_error("reclaim_from_cpp: Unsupported load type");
++            }
++        }
++        inst->owned = true;
++        return obj;
++    }
++#endif  // DRAKE_HOLDER
++
+     template <typename Base, detail::enable_if_t<is_base<Base>::value, int> = 0>
+     static void add_base(detail::type_record &rec) {
+         rec.add_base(typeid(Base), [](void *src) -> void * {
+@@ -1907,8 +2271,16 @@ private:
+         if (holder_ptr) {
+             init_holder_from_existing(v_h, holder_ptr, std::is_copy_constructible<holder_type>());
+             v_h.set_holder_constructed();
+-        } else if (detail::always_construct_holder<holder_type>::value || inst->owned) {
+-            new (std::addressof(v_h.holder<holder_type>())) holder_type(v_h.value_ptr<type>());
++        } else {
++            init_holder_simple(inst, v_h, v_h.value_ptr<type>());
++        }
++    }
++
++    /// Initialize a holder object simply (to be converted).
++    static void
++    init_holder_simple(detail::instance *inst, detail::value_and_holder &v_h, type *value) {
++        if (detail::always_construct_holder<holder_type>::value|| inst->owned) {
++            new (std::addressof(v_h.holder<holder_type>())) holder_type(value);
+             v_h.set_holder_constructed();
+         }
+     }
+@@ -1917,13 +2289,77 @@ private:
+     /// instance.  Should be called as soon as the `type` value_ptr is set for an instance.  Takes
+     /// an optional pointer to an existing holder to use; if not specified and the instance is
+     /// `.owned`, a new holder will be constructed to manage the value pointer.
+-    static void init_instance(detail::instance *inst, const void *holder_ptr) {
++    static void init_instance(detail::instance *inst, detail::holder_erased holder_ptr) {
++        using namespace detail;
+         auto v_h = inst->get_value_and_holder(detail::get_type_info(typeid(type)));
++        type *value_ptr = v_h.value_ptr<type>();
+         if (!v_h.instance_registered()) {
+-            register_instance(inst, v_h.value_ptr(), v_h.type);
++            register_instance(inst, value_ptr, v_h.type);
+             v_h.set_instance_registered();
+         }
+-        init_holder(inst, v_h, (const holder_type *) holder_ptr, v_h.value_ptr<type>());
++#if DRAKE_HOLDER
++        if (!holder_ptr) {
++            init_holder(inst, v_h, nullptr, value_ptr);
++        } else if (holder_ptr.type_id() == holder_type_id) {
++            init_holder(inst, v_h, &holder_ptr.cast<holder_type>(), value_ptr);
++        } else {
++            // Create a new, empty holder, and then transfer.
++            init_holder_simple(inst, v_h, nullptr);
++            if (!v_h.holder_constructed()) {
++                throw std::runtime_error("Bad edge case");
++            }
++            auto &holder = v_h.holder<holder_type>();
++            holder_check::accept_holder(holder_ptr, holder);
++        }
++
++        // TODO(eric.cousineau): Inject override of __del__ for intercepting C++ stuff
++        handle self((PyObject *) inst);
++        handle h_type = self.get_type();
++
++        // Use hacky Python-style inheritance check.
++        auto *py_type = (PyTypeObject *) h_type.ptr();
++        bool is_py_derived = py_type->tp_dealloc != detail::pybind11_object_dealloc;
++
++        bool can_add_del = true;
++
++        // Get non-instance-bound method (analogous `tp_del`).
++        // Is there a way to check if `__del__` is an instance-assigned
++        // method? (Rather than a class method?)
++        object del_orig = getattr(h_type, "__del__", none());
++
++        // Set reclaim method.
++        inst->reclaim_from_cpp = reclaim_from_cpp;
++
++#if defined(PYPY_VERSION)
++        // PyPy will not execute an arbitrarily-added `__del__` method.
++        // Later version of PyPy throw an error if this happens.
++        // Workaround: Define a no-op `__del__` if this feature is useful.
++        if (del_orig.is(none())) {
++            can_add_del = false;
++        }
++#endif
++
++        // Check tp_dealloc
++        if (is_py_derived && can_add_del) {
++            // TODO(eric.cousineau): Consider moving this outside of this class,
++            // to potentially enable multiple inheritance.
++            const std::string orig_field = "_pybind11_del_orig";
++            if (!hasattr(h_type, orig_field.c_str())) {
++                // NOTE: This is NOT tied to this particular type.
++                auto del_new = [orig_field](handle h_self) {
++                    // TODO(eric.cousineau): Make this global, not tied to this type.
++                    object del_orig = getattr(h_self.get_type(), orig_field.c_str());
++                    del_wrapped(h_self, del_orig);
++                };
++                // Replace with an Python-instance-unbound function.
++                object new_dtor_py = cpp_function(del_new, is_method(h_type));
++                setattr(h_type, "__del__", new_dtor_py);
++                setattr(h_type, orig_field.c_str(), del_orig);
++            }
++        }
++#else  // DRAKE_HOLDER
++    init_holder(inst, v_h, (const holder_type *) holder_ptr, value_ptr);
++#endif  // DRAKE_HOLDER
+     }
+ 
+     /// Deallocates an instance; via holder, if constructed; otherwise via operator delete.
+diff --git a/include/pybind11/pytypes.h b/include/pybind11/pytypes.h
+index d5f6af8e..1f2efee6 100644
+--- a/include/pybind11/pytypes.h
++++ b/include/pybind11/pytypes.h
+@@ -16,6 +16,7 @@
+ #include <cstddef>
+ #include <exception>
+ #include <frameobject.h>
++#include <iostream>
+ #include <iterator>
+ #include <memory>
+ #include <string>
+@@ -2451,6 +2452,112 @@ inline iterator iter(handle obj) {
+ }
+ /// @} python_builtins
+ 
++/// Wrapper to permit lifetime of a Python instance which is derived from a C++
++/// pybind type to be managed by C++. Useful when adding virtual classes to
++/// containers, where Python instance being added may be collected by Python
++/// gc / refcounting.
++/// @note Do NOT use the methods in this class.
++template <typename Base>
++class wrapper : public Base {
++public:
++    using Base::Base;
++
++    virtual ~wrapper() { // NOLINT(modernize-use-override)
++        delete_py_if_in_cpp();
++    }
++
++#if DRAKE_HOLDER
++    // To be used by the holder casters, by means of `wrapper_interface<>`.
++    // TODO(eric.cousineau): Make this private to ensure contract?
++    void use_cpp_lifetime(object &&patient, detail::HolderTypeId holder_type_id) {
++        if (lives_in_cpp()) {
++            throw std::runtime_error("Instance already lives in C++");
++        }
++        holder_type_id_ = holder_type_id;
++        patient_ = std::move(patient);
++        // @note It would be nice to put `resurrect_python3` here, but this is called by
++        // `PyObject_CallFinalizer`, which will end up reversing its effect anyways.
++    }
++#endif  // DRAKE_HOLDER
++
++    /// To be used by `move_only_holder_caster`.
++    object release_cpp_lifetime() {
++        if (!lives_in_cpp()) {
++            throw std::runtime_error("Instance does not live in C++");
++        }
++        resurrect_python3();
++        // Remove existing reference.
++        object tmp = std::move(patient_);
++        assert(!patient_);
++        return tmp;
++    }
++
++protected:
++    // TODO(eric.cousineau): Verify this with an example workflow.
++    void delete_py_if_in_cpp() {
++        if (lives_in_cpp()) {
++            // Ensure that we still are the unique one, such that the Python classes
++            // destructor will be called.
++#ifdef PYBIND11_WARN_DANGLING_UNIQUE_PYREF
++            if (holder_type_id_ == detail::HolderTypeId::UniquePtr) {
++                if (patient_.ref_count() != 1) {
++                    // TODO(eric.cousineau): Add Python class name
++                    std::string class_name = patient_.get_type().str();
++                    std::cerr << "WARNING(pybind11): When destroying Python subclass ("
++                              << class_name << "), "
++                              << "of a pybind11 class using a unique_ptr holder in C++, "
++                              << "ref_count == " << patient_.ref_count()
++                              << " != 1, which may cause undefined behavior." << std::endl
++                              << "  Please consider reviewing your code to trim existing "
++                                 "references, or use a move-compatible container."
++                              << std::endl;
++                }
++            }
++#endif // PYBIND11_WARN_DANGLING_UNIQUE_HOLDER
++       // Release object.
++            release_cpp_lifetime();
++        }
++    }
++
++    // Handle PEP 442, implemented in Python3, where resurrection more than once
++    // is a bit more dicey.
++    inline void resurrect_python3() {
++#if PY_VERSION_HEX >= 0x03080000
++        // Leak it as a means to stay alive for now.
++        // See: https://bugs.python.org/issue40240
++        if (_PyGC_FINALIZED(patient_.ptr())) {
++            if (leaked_) {
++                throw std::runtime_error("__del__ called twice in Python 3.8+?");
++            }
++            leaked_ = true;
++            patient_.inc_ref();
++        }
++#elif PY_VERSION_HEX >= 0x03000000
++        // Reverse single-finalization constraint in Python3.
++        // This was a really dirty workaround:
++        // See: https://bugs.python.org/issue32377
++        if (_PyGC_FINALIZED(patient_.ptr())) {
++            _PyGC_SET_FINALIZED(patient_.ptr(), 0);
++        }
++#endif // PY_VERSION_HEX >= 0x03080000
++    }
++
++private:
++    inline bool lives_in_cpp() const {
++        // NOTE: This is *false* if, for whatever reason, the wrapper class is
++        // constructed in C++... Meh. Not gonna worry about that situation.
++        return static_cast<bool>(patient_);
++    }
++
++    object patient_;
++#if DRAKE_HOLDER
++    detail::HolderTypeId holder_type_id_{detail::HolderTypeId::Unknown};
++#endif  // DRAKE_HOLDER
++#if PY_VERSION_HEX >= 0x03080000
++    bool leaked_{false};
++#endif // PY_VERSION_HEX >= 0x03080000
++};
++
+ PYBIND11_NAMESPACE_BEGIN(detail)
+ template <typename D>
+ iterator object_api<D>::begin() const {
