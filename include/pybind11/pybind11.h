@@ -1735,7 +1735,11 @@ public:
     using type_alias = detail::exactly_one_t<is_subtype, void, options...>;
     constexpr static bool has_alias = !std::is_void<type_alias>::value;
     constexpr static bool has_wrapper = detail::is_base_template_of<wrapper, type_alias>::value;
+#if 1  // XXX default to shared_ptr
+    using holder_type = detail::exactly_one_t<is_holder, std::shared_ptr<type>, options...>;
+#else
     using holder_type = detail::exactly_one_t<is_holder, std::unique_ptr<type>, options...>;
+#endif
 #if DRAKE_HOLDER
     constexpr static detail::HolderTypeId holder_type_id
         = detail::get_holder_type_id<holder_type>::value;
