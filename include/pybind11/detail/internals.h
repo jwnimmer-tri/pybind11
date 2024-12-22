@@ -254,7 +254,9 @@ struct type_info {
     /* true if this is a type registered with py::module_local */
     bool module_local : 1;
 
+#if DRAKE_HOLDER
     instance::type_release_info_t release_info;
+#endif  // DRAKE_HOLDER
 };
 
 /// On MSVC, debug and release builds are not ABI-compatible!

@@ -2452,6 +2452,7 @@ inline iterator iter(handle obj) {
 }
 /// @} python_builtins
 
+#if DRAKE_HOLDER
 /// Wrapper to permit lifetime of a Python instance which is derived from a C++
 /// pybind type to be managed by C++. Useful when adding virtual classes to
 /// containers, where Python instance being added may be collected by Python
@@ -2553,6 +2554,7 @@ private:
     bool leaked_{false};
 #endif // PY_VERSION_HEX >= 0x03080000
 };
+#endif  // DRAKE_HOLDER
 
 PYBIND11_NAMESPACE_BEGIN(detail)
 template <typename D>

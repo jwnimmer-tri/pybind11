@@ -547,6 +547,15 @@ enum class return_value_policy : uint8_t {
 
 class object;
 
+#ifndef DRAKE_ENABLE_HOLDER
+#define DRAKE_ENABLE_HOLDER 1
+#endif
+#if DRAKE_ENABLE_HOLDER
+#define DRAKE_HOLDER 1
+#else
+#define DRAKE_HOLDER 0
+#endif
+
 PYBIND11_NAMESPACE_BEGIN(detail)
 
 inline static constexpr int log2(size_t n, int k = 0) {
@@ -570,6 +579,7 @@ constexpr size_t instance_simple_holder_in_ptrs() {
     return size_in_ptrs(sizeof(std::shared_ptr<int>));
 }
 
+#if DRAKE_HOLDER
 enum class HolderTypeId {
     Unknown,
     UniquePtr,
@@ -643,6 +653,9 @@ private:
     HolderTypeId type_id_{HolderTypeId::Unknown};
     bool is_const_{true};
 };
+#else  // DRAKE_HOLDER
+using holder_erased = const void*;
+#endif  // DRAKE_HOLDER
 
 // Forward declarations
 struct type_info;
@@ -696,6 +709,7 @@ struct instance {
     /// If true, get_internals().patients has an entry for this object
     bool has_patients : 1;
 
+#if DRAKE_HOLDER
     typedef void (*release_to_cpp_t)(instance *inst, holder_erased external_holder, object &&obj);
     using reclaim_from_cpp_t = object (*)(instance *, holder_erased);
 
@@ -715,6 +729,7 @@ struct instance {
     /// will permit the instance to be reclaimed back by Python.
     // TODO(eric.cousineau): This may not be necessary. See note in `type_caster_generic::cast`.
     reclaim_from_cpp_t reclaim_from_cpp = nullptr;
+#endif  // DRAKE_HOLDER
 
     /// Initializes all of the above type/values/holders data (but not the instance values
     /// themselves)

@@ -1395,7 +1395,9 @@ protected:
         tinfo->default_holder = rec.default_holder;
         tinfo->module_local = rec.module_local;
 
+#if DRAKE_HOLDER
         tinfo->release_info = rec.release_info;
+#endif  // DRAKE_HOLDER
 
         auto &internals = get_internals();
         auto tindex = std::type_index(*rec.type);
@@ -1571,6 +1573,7 @@ template <template <typename...> class Tpl, typename Derived>
 using is_base_template_of
     = decltype(is_base_template_of_impl<Tpl>::check(std::declval<Derived *>()));
 
+#if DRAKE_HOLDER
 template <typename type, typename alias, bool compatible>
 struct wrapper_interface_impl {
     static void use_cpp_lifetime(type *cppobj, object &&obj, detail::HolderTypeId holder_type_id) {
@@ -1711,6 +1714,7 @@ struct holder_check_impl<detail::HolderTypeId::UniquePtr>
         }
     }
 };
+#endif  // DRAKE_HOLDER
 
 } // namespace detail
 
@@ -1732,8 +1736,10 @@ public:
     constexpr static bool has_alias = !std::is_void<type_alias>::value;
     constexpr static bool has_wrapper = detail::is_base_template_of<wrapper, type_alias>::value;
     using holder_type = detail::exactly_one_t<is_holder, std::unique_ptr<type>, options...>;
+#if DRAKE_HOLDER
     constexpr static detail::HolderTypeId holder_type_id
         = detail::get_holder_type_id<holder_type>::value;
+#endif  // DRAKE_HOLDER
 
     static_assert(detail::all_of<is_valid_class_option<options>...>::value,
                   "Unknown/invalid class_ template parameters provided");
@@ -1767,12 +1773,14 @@ public:
         record.dealloc = dealloc;
         record.default_holder = detail::is_instantiation<std::unique_ptr, holder_type>::value;
 
+#if DRAKE_HOLDER
         // TODO(eric.cousineau): Determine if it is possible to permit releasing without a
         // wrapper...
         auto &release_info = record.release_info;
         release_info.can_derive_from_wrapper = has_wrapper;
         release_info.release_to_cpp = release_to_cpp;
         release_info.holder_type_id = holder_type_id;
+#endif  // DRAKE_HOLDER
 
         set_operator_new<type>(&record);
 
@@ -1797,6 +1805,7 @@ public:
         return detail::get_type_info(id);
     }
 
+#if DRAKE_HOLDER
     using wrapper_interface = detail::wrapper_interface_impl<type, type_alias, has_wrapper>;
     using holder_check = detail::holder_check_impl<holder_type_id>;
 
@@ -1968,6 +1977,7 @@ public:
         inst->owned = true;
         return obj;
     }
+#endif  // DRAKE_HOLDER
 
     template <typename Base, detail::enable_if_t<is_base<Base>::value, int> = 0>
     static void add_base(detail::type_record &rec) {
@@ -2283,6 +2293,7 @@ private:
             register_instance(inst, value_ptr, v_h.type);
             v_h.set_instance_registered();
         }
+#if DRAKE_HOLDER
         if (!holder_ptr) {
             init_holder(inst, v_h, nullptr, value_ptr);
         } else if (holder_ptr.type_id() == holder_type_id) {
@@ -2342,6 +2353,9 @@ private:
                 setattr(h_type, orig_field.c_str(), del_orig);
             }
         }
+#else  // DRAKE_HOLDER
+    init_holder(inst, v_h, (const holder_type *) holder_ptr, value_ptr);
+#endif  // DRAKE_HOLDER
     }
 
     /// Deallocates an instance; via holder, if constructed; otherwise via operator delete.

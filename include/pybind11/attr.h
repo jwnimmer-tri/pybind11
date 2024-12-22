@@ -301,8 +301,10 @@ struct type_record {
     /// Function pointer to class_<..>::dealloc
     void (*dealloc)(detail::value_and_holder &) = nullptr;
 
+#if DRAKE_HOLDER
     /// See `type_info::has_cpp_release`.
     instance::type_release_info_t release_info;
+#endif  // DRAKE_HOLDER
 
     /// List of base classes of the newly created type
     list bases;

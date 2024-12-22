@@ -768,10 +768,16 @@ public:
     using base::typeinfo;
     using base::value;
 
+#if DRAKE_HOLDER
     handle src;
+#endif  // DRAKE_HOLDER
 
     bool load(handle src_in, bool convert) {
+#if DRAKE_HOLDER
         src = src_in;
+#else  // DRAKE_HOLDER
+        auto& src = src_in;
+#endif  // DRAKE_HOLDER
         return base::template load_impl<copyable_holder_caster<type, holder_type>>(src, convert);
     }
 
@@ -846,8 +852,10 @@ protected:
     static bool try_direct_conversions(handle) { return false; }
 
     holder_type holder;
+#if DRAKE_HOLDER
     constexpr static detail::HolderTypeId holder_type_id
         = detail::get_holder_type_id<holder_type>::value;
+#endif  // DRAKE_HOLDER
 };
 
 /// Specialize for the common std::shared_ptr, so users don't need to
@@ -874,12 +882,14 @@ struct move_only_holder_caster : type_caster_base<type> {
     move_only_holder_caster(move_only_holder_caster &&) = default;
     move_only_holder_caster(const move_only_holder_caster &) = delete;
     ~move_only_holder_caster() {
+#if DRAKE_HOLDER
         if (holder) {
             // If the argument was loaded into C++, but not transferred out,
             // then this was most likely part of a failed overload in
             // `argument_loader`. Transfer ownership back to Python.
             move_only_holder_caster::cast(std::move(holder), return_value_policy{}, handle{});
         }
+#endif  // DRAKE_HOLDER
     }
 
     static_assert(std::is_base_of<type_caster_base<type>, type_caster<type>>::value,
@@ -903,7 +913,9 @@ struct move_only_holder_caster : type_caster_base<type> {
     template <typename T>
     using cast_op_type = holder_type &&;
 
+#if DRAKE_HOLDER
     explicit operator holder_type &&() { return std::move(holder); }
+#endif  // DRAKE_HOLDER
 
     bool load(handle src, bool convert) {
         return base::template load_impl<move_only_holder_caster>(src, convert);
@@ -911,6 +923,7 @@ struct move_only_holder_caster : type_caster_base<type> {
 
     static constexpr auto name = type_caster_base<type>::name;
 
+#if DRAKE_HOLDER
 protected:
     friend class type_caster_generic;
     void check_holder_compat() {
@@ -974,6 +987,7 @@ protected:
     }
 
     holder_type holder;
+#endif  // DRAKE_HOLDER
 };
 
 template <typename type, typename deleter>

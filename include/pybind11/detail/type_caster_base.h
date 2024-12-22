@@ -259,14 +259,17 @@ PYBIND11_NOINLINE handle find_registered_python_instance(void *src,
                                                          const detail::type_info *tinfo,
                                                          bool should_take_ownership,
                                                          holder_erased existing_holder) {
+#if DRAKE_HOLDER
     // We only come across `!existing_holder` if we are coming from `cast` and not `cast_holder`.
     const bool is_bare_ptr
         = !existing_holder.ptr() && existing_holder.type_id() == HolderTypeId::Unknown;
+#endif  // DRAKE_HOLDER
 
     auto it_instances = get_internals().registered_instances.equal_range(src);
     for (auto it_i = it_instances.first; it_i != it_instances.second; ++it_i) {
         for (auto *instance_type : detail::all_type_info(Py_TYPE(it_i->second))) {
             if (instance_type && same_type(*instance_type->cpptype, *tinfo->cpptype)) {
+#if DRAKE_HOLDER
                 instance *const inst = it_i->second;
 
                 bool try_to_reclaim = false;
@@ -314,7 +317,10 @@ PYBIND11_NOINLINE handle find_registered_python_instance(void *src,
                                                  "registered reclaim method. Internal error?");
                     }
                     return inst->reclaim_from_cpp(inst, existing_holder).release();
-                } else {
+                }
+                else
+#endif  // DRAKE_HOLDER
+                {
                     // TODO(eric.cousineau): Should really check that ownership is consistent.
                     // e.g. if we say to take ownership of a pointer that is passed, does not have
                     // a holder... In the end, pybind11 would let ownership slip, and leak memory,
