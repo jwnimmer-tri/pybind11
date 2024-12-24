@@ -136,6 +136,10 @@ struct eigen_extract_stride<Eigen::Ref<PlainObjectType, Options, StrideType>> {
     using type = StrideType;
 };
 
+template <typename Scalar>
+using is_pyobject_dtype
+    = std::is_base_of<npy_format_descriptor<PyObject*>, npy_format_descriptor<Scalar>>;
+
 // Helper struct for extracting information from an Eigen type
 template <typename Type_>
 struct EigenProps {
@@ -175,11 +179,15 @@ struct EigenProps {
             return false;
         }
 
+        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
+        ssize_t scalar_size = (is_pyobject ? static_cast<ssize_t>(sizeof(PyObject *))
+                                           : static_cast<ssize_t>(sizeof(Scalar)));
+
         if (dims == 2) { // Matrix type: require exact match (or dynamic)
 
             EigenIndex np_rows = a.shape(0), np_cols = a.shape(1),
-                       np_rstride = a.strides(0) / static_cast<ssize_t>(sizeof(Scalar)),
-                       np_cstride = a.strides(1) / static_cast<ssize_t>(sizeof(Scalar));
+                       np_rstride = a.strides(0) / scalar_size,
+                       np_cstride = a.strides(1) / scalar_size;
             if ((fixed_rows && np_rows != rows) || (fixed_cols && np_cols != cols)) {
                 return false;
             }
@@ -189,8 +197,7 @@ struct EigenProps {
 
         // Otherwise we're storing an n-vector.  Only one of the strides will be used, but
         // whichever is used, we want the (single) numpy stride value.
-        const EigenIndex n = a.shape(0),
-                         stride = a.strides(0) / static_cast<ssize_t>(sizeof(Scalar));
+        const EigenIndex n = a.shape(0), stride = a.strides(0) / scalar_size;
 
         if (vector) { // Eigen type is a compile-time vector
             if (fixed && size != n) {
@@ -246,13 +253,68 @@ handle
 eigen_array_cast(typename props::Type const &src, handle base = handle(), bool writeable = true) {
     constexpr ssize_t elem_size = sizeof(typename props::Scalar);
     array a;
-    if (props::vector) {
-        a = array({src.size()}, {elem_size * src.innerStride()}, src.data(), base);
+    using Scalar = typename props::Type::Scalar;
+    bool is_pyobject
+        = static_cast<pybind11::detail::npy_api::constants>(npy_format_descriptor<Scalar>::value)
+          == npy_api::NPY_OBJECT_;
+
+    if (!is_pyobject) {
+        if (props::vector) {
+            a = array({src.size()}, {elem_size * src.innerStride()}, src.data(), base);
+        } else {
+            a = array({src.rows(), src.cols()},
+                      {elem_size * src.rowStride(), elem_size * src.colStride()},
+                      src.data(),
+                      base);
+        }
     } else {
-        a = array({src.rows(), src.cols()},
-                  {elem_size * src.rowStride(), elem_size * src.colStride()},
-                  src.data(),
-                  base);
+        if (base) {
+            // Should be disabled by upstream calls to this method.
+            // TODO(eric.cousineau): Write tests to ensure that this is not
+            // reachable.
+            throw cast_error("dtype=object does not permit array referencing. "
+                             "(NOTE: this generally not be reachable, as upstream APIs "
+                             "should fail before this.");
+        }
+        handle empty_base{};
+        auto policy = return_value_policy::copy;
+        if (props::vector) {
+            a = array(npy_format_descriptor<Scalar>::dtype(),
+                      {(size_t) src.size()},
+                      nullptr,
+                      empty_base);
+            auto _m_arr = a.mutable_unchecked<object, 1>();
+
+            constexpr bool is_row = props::fixed_rows && props::rows == 1;
+            for (ssize_t i = 0; i < src.size(); ++i) {
+                const Scalar src_val = is_row ? src(0, i) : src(i, 0);
+                auto value_ = reinterpret_steal<object>(
+                    make_caster<Scalar>::cast(src_val, policy, empty_base));
+                if (!value_) {
+                    return handle();
+                }
+
+                _m_arr[i] = value_;
+            }
+        } else {
+            a = array(npy_format_descriptor<Scalar>::dtype(),
+                      {(size_t) src.rows(), (size_t) src.cols()},
+                      nullptr,
+                      empty_base);
+            auto _m_arr = a.mutable_unchecked<object, 2>();
+
+            for (ssize_t i = 0; i < src.rows(); ++i) {
+                for (ssize_t j = 0; j < src.cols(); ++j) {
+                    auto value_ = reinterpret_steal<object>(
+                        make_caster<Scalar>::cast(src(i, j), policy, empty_base));
+                    if (!value_) {
+                        return handle();
+                    }
+
+                    _m_arr(i,j) = value_;
+                }
+            }
+        }
     }
 
     if (!writeable) {
@@ -314,17 +376,53 @@ struct type_caster<Type, enable_if_t<is_eigen_dense_plain<Type>::value>> {
         if (!fits) {
             return false;
         }
+        int result = 0;
 
         // Allocate the new type, then build a numpy reference into it
         value = Type(fits.rows, fits.cols);
-        auto ref = reinterpret_steal<array>(eigen_ref_array<props>(value));
-        if (dims == 1) {
-            ref = ref.squeeze();
-        } else if (ref.ndim() == 1) {
-            buf = buf.squeeze();
-        }
+        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
 
-        int result = detail::npy_api::get().PyArray_CopyInto_(ref.ptr(), buf.ptr());
+        if (!is_pyobject) {
+            auto ref = reinterpret_steal<array>(eigen_ref_array<props>(value));
+            if (dims == 1) {
+                ref = ref.squeeze();
+            } else if (ref.ndim() == 1) {
+                buf = buf.squeeze();
+            }
+            result = detail::npy_api::get().PyArray_CopyInto_(ref.ptr(), buf.ptr());
+        } else {
+            if (dims == 1) {
+                if (Type::RowsAtCompileTime == Eigen::Dynamic) {
+                    value.resize(buf.shape(0), 1);
+                } else if (Type::ColsAtCompileTime == Eigen::Dynamic) {
+                    value.resize(1, buf.shape(0));
+                }
+
+                for (ssize_t i = 0; i < buf.shape(0); ++i) {
+                    make_caster<Scalar> conv_val;
+                    if (!conv_val.load(buf.attr("item")(i).cast<pybind11::object>(), convert)) {
+                        return false;
+                    }
+                    value(i) = cast_op<Scalar>(conv_val);
+                }
+            } else {
+                if (Type::RowsAtCompileTime == Eigen::Dynamic
+                    || Type::ColsAtCompileTime == Eigen::Dynamic) {
+                    value.resize(buf.shape(0), buf.shape(1));
+                }
+                for (ssize_t i = 0; i < buf.shape(0); ++i) {
+                    for (ssize_t j = 0; j < buf.shape(1); ++j) {
+                        // p is the const void pointer to the item
+                        make_caster<Scalar> conv_val;
+                        if (!conv_val.load(buf.attr("item")(i, j).cast<pybind11::object>(),
+                                           convert)) {
+                            return false;
+                        }
+                        value(i, j) = cast_op<Scalar>(conv_val);
+                    }
+                }
+            }
+        }
 
         if (result < 0) { // Copy failed!
             PyErr_Clear();
@@ -338,22 +436,42 @@ private:
     // Cast implementation
     template <typename CType>
     static handle cast_impl(CType *src, return_value_policy policy, handle parent) {
-        switch (policy) {
-            case return_value_policy::take_ownership:
-            case return_value_policy::automatic:
-                return eigen_encapsulate<props>(src);
-            case return_value_policy::move:
-                return eigen_encapsulate<props>(new CType(std::move(*src)));
-            case return_value_policy::copy:
-                return eigen_array_cast<props>(*src);
-            case return_value_policy::reference:
-            case return_value_policy::automatic_reference:
-                return eigen_ref_array<props>(*src);
-            case return_value_policy::reference_internal:
-                return eigen_ref_array<props>(*src, parent);
-            default:
-                throw cast_error("unhandled return_value_policy: should not happen!");
-        };
+        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
+        if (!is_pyobject) {
+            switch (policy) {
+                case return_value_policy::take_ownership:
+                case return_value_policy::automatic:
+                    return eigen_encapsulate<props>(src);
+                case return_value_policy::move:
+                    return eigen_encapsulate<props>(new CType(std::move(*src)));
+                case return_value_policy::copy:
+                    return eigen_array_cast<props>(*src);
+                case return_value_policy::reference:
+                case return_value_policy::automatic_reference:
+                    return eigen_ref_array<props>(*src);
+                case return_value_policy::reference_internal:
+                    return eigen_ref_array<props>(*src, parent);
+                default:
+                    throw cast_error("unhandled return_value_policy: should not happen!");
+            };
+        } else {
+            // For arrays of `dtype=object`, referencing is invalid, so we should squash that as
+            // soon as possible.
+            switch (policy) {
+                case return_value_policy::automatic:
+                case return_value_policy::move:
+                case return_value_policy::copy:
+                case return_value_policy::automatic_reference:
+                    return eigen_array_cast<props>(*src);
+                case return_value_policy::take_ownership:
+                case return_value_policy::reference:
+                case return_value_policy::reference_internal:
+                    throw cast_error(
+                        "dtype=object arrays must be copied, and cannot be referenced");
+                default:
+                    throw cast_error("unhandled return_value_policy: should not happen!");
+            };
+        }
     }
 
 public:
@@ -413,6 +531,7 @@ struct eigen_map_caster {
 
 private:
     using props = EigenProps<MapType>;
+    using Scalar = typename props::Scalar;
 
 public:
     // Directly referencing a ref/map's data is a bit dangerous (whatever the map/ref points to has
@@ -422,18 +541,36 @@ public:
     // Note that this means you need to ensure you don't destroy the object in some other way (e.g.
     // with an appropriate keep_alive, or with a reference to a statically allocated matrix).
     static handle cast(const MapType &src, return_value_policy policy, handle parent) {
-        switch (policy) {
-            case return_value_policy::copy:
-                return eigen_array_cast<props>(src);
-            case return_value_policy::reference_internal:
-                return eigen_array_cast<props>(src, parent, is_eigen_mutable_map<MapType>::value);
-            case return_value_policy::reference:
-            case return_value_policy::automatic:
-            case return_value_policy::automatic_reference:
-                return eigen_array_cast<props>(src, none(), is_eigen_mutable_map<MapType>::value);
-            default:
-                // move, take_ownership don't make any sense for a ref/map:
-                pybind11_fail("Invalid return_value_policy for Eigen Map/Ref/Block type");
+        if (!is_pyobject_dtype<Scalar>::value) {
+            switch (policy) {
+                case return_value_policy::copy:
+                    return eigen_array_cast<props>(src);
+                case return_value_policy::reference_internal:
+                    return eigen_array_cast<props>(
+                        src, parent, is_eigen_mutable_map<MapType>::value);
+                case return_value_policy::reference:
+                case return_value_policy::automatic:
+                case return_value_policy::automatic_reference:
+                    return eigen_array_cast<props>(
+                        src, none(), is_eigen_mutable_map<MapType>::value);
+                default:
+                    // move, take_ownership don't make any sense for a ref/map:
+                    pybind11_fail("Invalid return_value_policy for Eigen Map/Ref/Block type");
+            }
+        } else {
+            switch (policy) {
+                case return_value_policy::copy:
+                    return eigen_array_cast<props>(src);
+                case return_value_policy::reference_internal:
+                case return_value_policy::reference:
+                case return_value_policy::automatic:
+                case return_value_policy::automatic_reference:
+                    throw cast_error(
+                        "dtype=object arrays must be copied, and cannot be referenced");
+                default:
+                    // move, take_ownership don't make any sense for a ref/map:
+                    pybind11_fail("Invalid return_value_policy for Eigen Map/Ref/Block type");
+            }
         }
     }
 
@@ -485,6 +622,7 @@ private:
     // conversion and storage order conversion.  (Note that we refuse to use this temporary copy
     // when loading an argument for a Ref<M> with M non-const, i.e. a read-write reference).
     Array copy_or_ref;
+    typename std::remove_cv<PlainObjectType>::type val;
 
 public:
     bool load(handle src, bool convert) {
@@ -493,6 +631,17 @@ public:
         bool need_copy = !isinstance<Array>(src);
 
         EigenConformable<props::row_major> fits;
+        constexpr bool is_pyobject = is_pyobject_dtype<Scalar>::value;
+        // TODO(eric.cousineau): Make this compile-time once Drake does not use this in any code
+        // for scalar types.
+        // static_assert(!(is_pyobject && need_writeable), "dtype=object cannot provide writeable
+        // references");
+        if (is_pyobject && need_writeable) {
+            throw cast_error("dtype=object cannot provide writeable references");
+        }
+        if (is_pyobject) {
+            need_copy = true;
+        }
         if (!need_copy) {
             // We don't need a converting copy, but we also need to check whether the strides are
             // compatible with the Ref's stride requirements
@@ -517,7 +666,7 @@ public:
             // We need to copy: If we need a mutable reference, or we're not supposed to convert
             // (either because we're in the no-convert overload pass, or because we're explicitly
             // instructed not to copy (via `py::arg().noconvert()`) we have to fail loading.
-            if (!convert || need_writeable) {
+            if (!is_pyobject && (!convert || need_writeable)) {
                 return false;
             }
 
@@ -529,8 +678,46 @@ public:
             if (!fits || !fits.template stride_compatible<props>()) {
                 return false;
             }
-            copy_or_ref = std::move(copy);
-            loader_life_support::add_patient(copy_or_ref);
+
+            if (!is_pyobject) {
+                copy_or_ref = std::move(copy);
+                loader_life_support::add_patient(copy_or_ref);
+            } else {
+                auto dims = copy.ndim();
+                if (dims == 1) {
+                    if (Type::RowsAtCompileTime == Eigen::Dynamic
+                        || Type::ColsAtCompileTime == Eigen::Dynamic) {
+                        val.resize(copy.shape(0), 1);
+                    }
+                    for (ssize_t i = 0; i < copy.shape(0); ++i) {
+                        make_caster<Scalar> conv_val;
+                        if (!conv_val.load(copy.attr("item")(i).template cast<pybind11::object>(),
+                                           convert)) {
+                            return false;
+                        }
+                        val(i) = cast_op<Scalar>(conv_val);
+                    }
+                } else {
+                    if (Type::RowsAtCompileTime == Eigen::Dynamic
+                        || Type::ColsAtCompileTime == Eigen::Dynamic) {
+                        val.resize(copy.shape(0), copy.shape(1));
+                    }
+                    for (ssize_t i = 0; i < copy.shape(0); ++i) {
+                        for (ssize_t j = 0; j < copy.shape(1); ++j) {
+                            // p is the const void pointer to the item
+                            make_caster<Scalar> conv_val;
+                            if (!conv_val.load(
+                                    copy.attr("item")(i, j).template cast<pybind11::object>(),
+                                    convert)) {
+                                return false;
+                            }
+                            val(i, j) = cast_op<Scalar>(conv_val);
+                        }
+                    }
+                }
+                ref.reset(new Type(val));
+                return true;
+            }
         }
 
         ref.reset();
@@ -649,16 +836,26 @@ struct type_caster<Type, enable_if_t<is_eigen_sparse<Type>::value>> {
     using Index = typename Type::Index;
     static constexpr bool rowMajor = Type::IsRowMajor;
 
-    bool load(handle src, bool) {
+    bool load(handle src, bool convert) {
         if (!src) {
             return false;
         }
 
         auto obj = reinterpret_borrow<object>(src);
-        object sparse_module = module_::import("scipy.sparse");
+        object sparse_module;
+        try {
+            sparse_module = module_::import("scipy.sparse");
+        } catch (const error_already_set &) {
+            // As a Drake-specific amendment, we skip Eigen::Sparse overloads
+            // when scipy is not available, instead of raising an import error.
+            return false;
+        }
         object matrix_type = sparse_module.attr(rowMajor ? "csr_matrix" : "csc_matrix");
 
         if (!type::handle_of(obj).is(matrix_type)) {
+            if (!convert) {
+                return false;
+            }
             try {
                 obj = matrix_type(obj);
             } catch (const error_already_set &) {
